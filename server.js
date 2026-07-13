@@ -16,7 +16,7 @@ const auditLogRoutes = require("./routes/auditLogRoutes");
 const app = express();
 
 app.use(cors({
-   origin: '*'
+   origin: 'https://polite-hill-0a1070300.7.azurestaticapps.net'
 }));
 app.use(express.json());
 app.use(morgan("dev"));
