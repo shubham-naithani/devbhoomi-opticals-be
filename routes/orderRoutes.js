@@ -1,6 +1,7 @@
 const express = require("express");
 const {
   createOrder,
+  createWalkInOrder,
   getMyOrders,
   getAllOrders,
   updateOrderStatus,
@@ -14,7 +15,8 @@ router.use(protect); // every order route requires a logged-in user
 router.post("/", createOrder);
 router.get("/my", getMyOrders);
 
-router.get("/", authorize("admin"), getAllOrders);
-router.put("/:id/status", authorize("admin"), updateOrderStatus);
+router.post("/walk-in", authorize("admin", "staff"), createWalkInOrder);
+router.get("/", authorize("admin", "staff"), getAllOrders);
+router.put("/:id/status", authorize("admin", "staff"), updateOrderStatus);
 
 module.exports = router;

@@ -16,6 +16,11 @@ const orderItemSchema = new mongoose.Schema(
 
 const orderSchema = new mongoose.Schema(
   {
+    orderId: {
+      type: String,
+      unique: true,
+      required: true, // assigned via utils/humanId.js before creation
+    },
     customer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -33,13 +38,29 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["cod"], // online payment gateway comes in a later phase
+      enum: ["cod", "cash", "card", "upi"],
       default: "cod",
     },
     status: {
       type: String,
       enum: ["pending", "confirmed", "delivered", "cancelled"],
       default: "pending",
+    },
+    // Where the order originated — lets reporting split walk-in vs online sales.
+    source: {
+      type: String,
+      enum: ["online", "in_store"],
+      default: "online",
+    },
+    // Staff/admin member who created this order on the customer's behalf.
+    // Null for a customer's own self-checkout order.
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    prescriptionUsed: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EyeTest",
     },
     shippingAddress: {
       type: String,

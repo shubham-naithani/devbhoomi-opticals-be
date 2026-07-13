@@ -1,4 +1,7 @@
 const User = require("../models/User");
+const { logAudit } = require("../utils/auditLogger");
+
+const VALID_ROLES = ["admin", "staff", "customer"];
 
 // GET /api/users  (admin only) — list all users, with basic search + pagination
 async function getUsers(req, res, next) {
@@ -10,6 +13,7 @@ async function getUsers(req, res, next) {
       filter.$or = [
         { name: { $regex: search, $options: "i" } },
         { email: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
       ];
     }
     if (role) filter.role = role;
@@ -38,7 +42,9 @@ async function getUserById(req, res, next) {
   }
 }
 
-// POST /api/users (admin only) — create a user, optionally an admin/staff account
+// POST /api/users (admin only) — create an admin/staff/customer account
+// Email is required here (this is the "proper" account creation form, distinct
+// from the lightweight walk-in customer quick-create in customerController).
 async function createUser(req, res, next) {
   try {
     const { name, email, password, phone, role } = req.body;
@@ -57,7 +63,16 @@ async function createUser(req, res, next) {
       email,
       password,
       phone,
-      role: role === "admin" ? "admin" : "customer",
+      role: VALID_ROLES.includes(role) ? role : "customer",
+      source: "online",
+    });
+
+    await logAudit({
+      entityType: "User",
+      entityId: user._id,
+      action: "create",
+      user: req.user,
+      summary: `Created ${user.role} account for ${user.name}`,
     });
 
     res.status(201).json({ user });
@@ -77,11 +92,23 @@ async function updateUser(req, res, next) {
     if (name !== undefined) user.name = name;
     if (email !== undefined) user.email = email;
     if (phone !== undefined) user.phone = phone;
-    if (role !== undefined) user.role = role;
+    if (role !== undefined && VALID_ROLES.includes(role)) user.role = role;
     if (isActive !== undefined) user.isActive = isActive;
-    if (password) user.password = password; // will be re-hashed by the pre-save hook
+    if (password) {
+      user.password = password; // will be re-hashed by the pre-save hook
+      user.canLogin = true;
+    }
 
     await user.save();
+
+    await logAudit({
+      entityType: "User",
+      entityId: user._id,
+      action: "update",
+      user: req.user,
+      summary: `Updated account for ${user.name}`,
+    });
+
     res.json({ user });
   } catch (err) {
     next(err);
@@ -97,6 +124,14 @@ async function deleteUser(req, res, next) {
 
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    await logAudit({
+      entityType: "User",
+      entityId: user._id,
+      action: "delete",
+      user: req.user,
+      summary: `Deleted account for ${user.name}`,
+    });
 
     res.json({ message: "User deleted", id: req.params.id });
   } catch (err) {
