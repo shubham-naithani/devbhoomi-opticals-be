@@ -109,6 +109,16 @@ const orderSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Cumulative cash change handed back to the customer, whenever a
+    // recorded payment (at creation or later) exceeded what was actually
+    // owed. Kept on the order itself — not just logged transiently — so
+    // staff can look back and confirm change was already given, rather than
+    // relying on catching a one-time toast notification.
+    changeGiven: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

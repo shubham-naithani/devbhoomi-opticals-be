@@ -131,6 +131,7 @@ async function createWalkInOrder(req, res, next) {
     }
 
     let createdOrder;
+    let changeDue = 0;
 
     await session.withTransaction(async () => {
       const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session);
@@ -138,10 +139,14 @@ async function createWalkInOrder(req, res, next) {
 
       // Default: fully paid at the counter. If the admin/staff entered a
       // smaller amountPaid, that's recorded as an advance/deposit instead.
-      const paidNow =
-        amountPaid !== undefined && amountPaid !== null
-          ? Math.max(0, Math.min(Number(amountPaid), totalAmount))
-          : totalAmount;
+      // If they entered MORE than the total (cash tendered exceeds the
+      // bill), the excess is change owed back to the customer — the store
+      // never "receives" more than the order total, so amountPaid is capped,
+      // and the change amount is surfaced back to the caller instead of
+      // silently disappearing.
+      const rawAmount = amountPaid !== undefined && amountPaid !== null ? Number(amountPaid) : totalAmount;
+      const paidNow = Math.max(0, Math.min(rawAmount, totalAmount));
+      changeDue = Math.max(rawAmount - totalAmount, 0);
 
       const docs = await Order.create(
         [
@@ -151,6 +156,7 @@ async function createWalkInOrder(req, res, next) {
             items: orderItems,
             totalAmount,
             amountPaid: paidNow,
+            changeGiven: changeDue,
             paymentMethod: paymentMethod || "cash",
             status: "confirmed", // in-person sale — no separate confirmation step needed
             source: "in_store",
@@ -170,12 +176,14 @@ async function createWalkInOrder(req, res, next) {
       entityId: createdOrder._id,
       action: "create",
       user: req.user,
-      summary: `Walk-in order ${createdOrder.orderId} created for ${customer.name} by ${req.user.name}`,
+      summary:
+        `Walk-in order ${createdOrder.orderId} created for ${customer.name} by ${req.user.name}` +
+        (changeDue > 0 ? ` — Rs.${changeDue} change given` : ""),
     });
 
     notifyOrderCreated(createdOrder, customer.phone).catch(() => {});
 
-    res.status(201).json({ order: createdOrder });
+    res.status(201).json({ order: createdOrder, changeDue });
   } catch (err) {
     next(err);
   } finally {
@@ -305,7 +313,10 @@ async function recordPayment(req, res, next) {
     );
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    order.amountPaid = Math.min(order.amountPaid + addAmount, order.totalAmount);
+    const newTotalPaid = order.amountPaid + addAmount;
+    const changeDue = Math.max(newTotalPaid - order.totalAmount, 0);
+    order.amountPaid = Math.min(newTotalPaid, order.totalAmount);
+    if (changeDue > 0) order.changeGiven += changeDue;
     await order.save(); // pre-save hook recalculates paymentStatus
 
     await logAudit({
@@ -313,13 +324,15 @@ async function recordPayment(req, res, next) {
       entityId: order._id,
       action: "update",
       user: req.user,
-      summary: `Payment of Rs.${addAmount} recorded on order ${order.orderId} (now ${order.paymentStatus})`,
+      summary:
+        `Payment of Rs.${addAmount} recorded on order ${order.orderId} (now ${order.paymentStatus})` +
+        (changeDue > 0 ? ` — Rs.${changeDue} change given` : ""),
     });
 
     const customerPhone = order.customer && order.customer.phone;
     notifyPaymentReceived(order, addAmount, customerPhone).catch(() => {});
 
-    res.json({ order });
+    res.json({ order, changeDue });
   } catch (err) {
     next(err);
   }
