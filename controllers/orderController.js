@@ -183,13 +183,19 @@ async function createWalkInOrder(req, res, next) {
   }
 }
 
-// GET /api/orders/my (logged-in customer) — their own order history
+// GET /api/orders/my (logged-in customer) — their own order history, paginated
 async function getMyOrders(req, res, next) {
   try {
-    const orders = await Order.find({ customer: req.user._id, isDeleted: { $ne: true } }).sort({
-      createdAt: -1,
-    });
-    res.json({ orders });
+    const { page = 1, limit = 10 } = req.query;
+    const filter = { customer: req.user._id, isDeleted: { $ne: true } };
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const [orders, total] = await Promise.all([
+      Order.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+      Order.countDocuments(filter),
+    ]);
+
+    res.json({ orders, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (err) {
     next(err);
   }
