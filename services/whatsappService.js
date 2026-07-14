@@ -62,17 +62,39 @@ async function sendWhatsAppMessage(toPhone, message) {
 // ---- Order lifecycle message templates -----------------------------------
 
 async function notifyOrderCreated(order, customerPhone) {
+  const balance = order.totalAmount - order.amountPaid;
+  const paymentLine =
+    order.amountPaid >= order.totalAmount
+      ? `Paid in full: Rs.${order.amountPaid}.`
+      : order.amountPaid > 0
+      ? `Advance received: Rs.${order.amountPaid}. Balance due: Rs.${balance}.`
+      : `Balance due: Rs.${order.totalAmount}.`;
+
   const message =
     `Hi! Your order ${order.orderId} at Devbhoomi Opticals has been placed. ` +
-    `Total: Rs.${order.totalAmount}. We'll update you as it progresses.`;
+    `Total: Rs.${order.totalAmount}. ${paymentLine}`;
 
   await sendWhatsAppMessage(customerPhone, message);
 
   if (ADMIN_NOTIFY_PHONE) {
     await sendWhatsAppMessage(
       ADMIN_NOTIFY_PHONE,
-      `New order ${order.orderId} placed (${order.source}) — Rs.${order.totalAmount}.`
+      `New order ${order.orderId} placed (${order.source}) — Rs.${order.totalAmount}. ${paymentLine}`
     );
+  }
+}
+
+async function notifyPaymentReceived(order, amountJustPaid, customerPhone) {
+  const balance = order.totalAmount - order.amountPaid;
+  const message =
+    balance > 0
+      ? `Payment received: Rs.${amountJustPaid} towards order ${order.orderId}. Remaining balance: Rs.${balance}.`
+      : `Payment received: Rs.${amountJustPaid} towards order ${order.orderId}. Fully paid — thank you!`;
+
+  await sendWhatsAppMessage(customerPhone, message);
+
+  if (ADMIN_NOTIFY_PHONE) {
+    await sendWhatsAppMessage(ADMIN_NOTIFY_PHONE, `Payment of Rs.${amountJustPaid} recorded on order ${order.orderId}.`);
   }
 }
 
@@ -92,4 +114,4 @@ async function notifyOrderStatusChanged(order, customerPhone) {
   }
 }
 
-module.exports = { sendWhatsAppMessage, notifyOrderCreated, notifyOrderStatusChanged };
+module.exports = { sendWhatsAppMessage, notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived };

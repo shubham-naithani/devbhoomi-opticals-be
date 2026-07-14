@@ -1,17 +1,38 @@
 const Inventory = require("../models/Inventory");
 const { generateInventorySku } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
+const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
+
+// POST /api/inventory/upload-images (admin only)
+// Accepts multipart files under the field name "images" (up to 6), uploads
+// each to Azure Blob Storage, and returns their public URLs. The frontend
+// calls this first, then includes the returned URLs in the create/update
+// payload — decoupling "pick files" from "save the item" so a preview can be
+// shown before committing.
+async function uploadImages(req, res, next) {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "No files uploaded" });
+    }
+
+    const urls = await uploadInventoryImages(req.files);
+    res.status(201).json({ urls });
+  } catch (err) {
+    next(err);
+  }
+}
 
 // GET /api/inventory — public: browse catalog. Admin/staff get inactive items too.
 async function getInventory(req, res, next) {
   try {
-    const { search = "", category, gender, page = 1, limit = 20 } = req.query;
+    const { search = "", category, gender, frameShape, page = 1, limit = 20 } = req.query;
     const isStaffOrAdmin = req.user && ["admin", "staff"].includes(req.user.role);
 
     const filter = isStaffOrAdmin ? {} : { isActive: true };
     if (search) filter.$text = { $search: search };
     if (category) filter.category = category;
     if (gender) filter.gender = gender;
+    if (frameShape) filter.frameShape = frameShape;
 
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -70,11 +91,15 @@ async function updateInventory(req, res, next) {
     // SKU is immutable once assigned — strip it from update payloads even if sent.
     const { sku, ...updates } = req.body;
 
+    const before = await Inventory.findById(req.params.id);
+    if (!before) return res.status(404).json({ message: "Item not found" });
+
+    const previousImages = before.images || [];
+
     const item = await Inventory.findByIdAndUpdate(req.params.id, updates, {
       returnDocument: "after",
       runValidators: true,
     });
-    if (!item) return res.status(404).json({ message: "Item not found" });
 
     await logAudit({
       entityType: "Inventory",
@@ -83,6 +108,13 @@ async function updateInventory(req, res, next) {
       user: req.user,
       summary: `Inventory item updated: ${item.sku} — ${item.name}`,
     });
+
+    // Clean up any photos that were removed in this edit — otherwise they'd
+    // sit in Blob Storage forever, invisible and quietly costing money.
+    const removedImages = previousImages.filter((url) => !(item.images || []).includes(url));
+    if (removedImages.length > 0) {
+      deleteInventoryImages(removedImages).catch(() => {});
+    }
 
     res.json({ item });
   } catch (err) {
@@ -104,6 +136,10 @@ async function deleteInventory(req, res, next) {
       summary: `Inventory item deleted: ${item.sku} — ${item.name}`,
     });
 
+    if (item.images && item.images.length > 0) {
+      deleteInventoryImages(item.images).catch(() => {});
+    }
+
     res.json({ message: "Item deleted", id: req.params.id });
   } catch (err) {
     next(err);
@@ -116,4 +152,5 @@ module.exports = {
   createInventory,
   updateInventory,
   deleteInventory,
+  uploadImages,
 };
