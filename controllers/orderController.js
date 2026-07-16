@@ -285,10 +285,9 @@ async function updateOrderStatus(req, res, next) {
       return res.status(400).json({ message: `Status must be one of: ${allowed.join(", ")}` });
     }
 
-    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).populate(
-      "customer",
-      "name email phone"
-    );
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+      .populate("customer", "name email phone")
+      .populate("createdBy", "name");
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     await session.withTransaction(async () => {
@@ -332,10 +331,9 @@ async function recordPayment(req, res, next) {
       return res.status(400).json({ message: "Enter a valid payment amount" });
     }
 
-    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).populate(
-      "customer",
-      "name phone"
-    );
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+      .populate("customer", "name phone")
+      .populate("createdBy", "name");
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     const newTotalPaid = order.amountPaid + addAmount;
@@ -372,7 +370,9 @@ async function updateOrder(req, res, next) {
   try {
     const { notes, shippingAddress, contactPhone, paymentMethod } = req.body;
 
-    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } });
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+      .populate("customer", "name email phone")
+      .populate("createdBy", "name");
     if (!order) return res.status(404).json({ message: "Order not found" });
 
     if (notes !== undefined) order.notes = notes;
