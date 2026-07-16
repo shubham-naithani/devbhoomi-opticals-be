@@ -3,36 +3,28 @@ const { generateInventorySku } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
 
-// POST /api/inventory/upload-images (admin only)
-// Accepts multipart files under the field name "images" (up to 6), uploads
-// each to Azure Blob Storage, and returns their public URLs. The frontend
-// calls this first, then includes the returned URLs in the create/update
-// payload — decoupling "pick files" from "save the item" so a preview can be
-// shown before committing.
-async function uploadImages(req, res, next) {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ message: "No files uploaded" });
-    }
-
-    const urls = await uploadInventoryImages(req.files);
-    res.status(201).json({ urls });
-  } catch (err) {
-    next(err);
-  }
-}
-
-// GET /api/inventory — public: browse catalog. Admin/staff get inactive items too.
+// GET /api/inventory — public: browse products. Admin/staff get inactive
+// products too. `search` matches name/brand (text index) OR a specific
+// article's SKU (regex, since SKUs like "EYG-000045" need exact/prefix
+// matching that a text index doesn't handle well).
 async function getInventory(req, res, next) {
   try {
-    const { search = "", category, gender, frameShape, page = 1, limit = 20 } = req.query;
+    const { search = "", category, gender, frameShape, brand, page = 1, limit = 20 } = req.query;
     const isStaffOrAdmin = req.user && ["admin", "staff"].includes(req.user.role);
 
     const filter = isStaffOrAdmin ? {} : { isActive: true };
-    if (search) filter.$text = { $search: search };
     if (category) filter.category = category;
     if (gender) filter.gender = gender;
     if (frameShape) filter.frameShape = frameShape;
+    if (brand) filter.brand = { $regex: `^${brand}$`, $options: "i" };
+
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { brand: { $regex: search, $options: "i" } },
+        { "articles.sku": { $regex: search, $options: "i" } },
+      ];
+    }
 
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -58,25 +50,42 @@ async function getInventoryById(req, res, next) {
   }
 }
 
-// POST /api/inventory (admin only)
-// SKU is now always auto-generated server-side — never trusted/accepted from the client,
-// so every item is guaranteed a unique, correctly-formatted code.
+// GET /api/inventory/brands — distinct brand list, used to power "more from
+// this brand" links and any brand filter dropdown.
+async function getBrands(req, res, next) {
+  try {
+    const brands = await Inventory.distinct("brand", { isActive: true });
+    res.json({ brands: brands.filter(Boolean).sort() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/inventory (admin only) — creates a product together with its
+// first article/variant in one request, matching the existing "add item"
+// form UX (further variants are added afterward via addArticle).
+// Body: { name, brand, category, ..., article: { color, price, stock, ... } }
 async function createInventory(req, res, next) {
   try {
-    const { name, price } = req.body;
-    if (!name || price === undefined) {
-      return res.status(400).json({ message: "Name and price are required" });
+    const { name, article, ...productFields } = req.body;
+    if (!name) return res.status(400).json({ message: "Product name is required" });
+    if (!article || article.price === undefined) {
+      return res.status(400).json({ message: "At least one article with a price is required" });
     }
 
-    const sku = await generateInventorySku(req.body.category);
-    const item = await Inventory.create({ ...req.body, sku });
+    const sku = await generateInventorySku(productFields.category);
+    const item = await Inventory.create({
+      name,
+      ...productFields,
+      articles: [{ ...article, sku }],
+    });
 
     await logAudit({
       entityType: "Inventory",
       entityId: item._id,
       action: "create",
       user: req.user,
-      summary: `Inventory item created: ${item.sku} — ${item.name}`,
+      summary: `Product created: ${item.name} (first article ${sku})`,
     });
 
     res.status(201).json({ item });
@@ -85,36 +94,26 @@ async function createInventory(req, res, next) {
   }
 }
 
-// PUT /api/inventory/:id (admin only)
+// PUT /api/inventory/:id (admin only) — product-level fields only.
+// Articles are never edited here — use the dedicated article endpoints —
+// so a stray `articles` key in the payload is always ignored.
 async function updateInventory(req, res, next) {
   try {
-    // SKU is immutable once assigned — strip it from update payloads even if sent.
-    const { sku, ...updates } = req.body;
-
-    const before = await Inventory.findById(req.params.id);
-    if (!before) return res.status(404).json({ message: "Item not found" });
-
-    const previousImages = before.images || [];
+    const { articles, ...updates } = req.body;
 
     const item = await Inventory.findByIdAndUpdate(req.params.id, updates, {
       returnDocument: "after",
       runValidators: true,
     });
+    if (!item) return res.status(404).json({ message: "Item not found" });
 
     await logAudit({
       entityType: "Inventory",
       entityId: item._id,
       action: "update",
       user: req.user,
-      summary: `Inventory item updated: ${item.sku} — ${item.name}`,
+      summary: `Product updated: ${item.name}`,
     });
-
-    // Clean up any photos that were removed in this edit — otherwise they'd
-    // sit in Blob Storage forever, invisible and quietly costing money.
-    const removedImages = previousImages.filter((url) => !(item.images || []).includes(url));
-    if (removedImages.length > 0) {
-      deleteInventoryImages(removedImages).catch(() => {});
-    }
 
     res.json({ item });
   } catch (err) {
@@ -122,7 +121,8 @@ async function updateInventory(req, res, next) {
   }
 }
 
-// DELETE /api/inventory/:id (admin only)
+// DELETE /api/inventory/:id (admin only) — deletes the product and every
+// one of its articles, cleaning up all their photos from Blob Storage.
 async function deleteInventory(req, res, next) {
   try {
     const item = await Inventory.findByIdAndDelete(req.params.id);
@@ -133,14 +133,126 @@ async function deleteInventory(req, res, next) {
       entityId: item._id,
       action: "delete",
       user: req.user,
-      summary: `Inventory item deleted: ${item.sku} — ${item.name}`,
+      summary: `Product deleted: ${item.name} (${item.articles.length} article(s))`,
     });
 
-    if (item.images && item.images.length > 0) {
-      deleteInventoryImages(item.images).catch(() => {});
+    const allImages = item.articles.flatMap((a) => a.images || []);
+    if (allImages.length > 0) deleteInventoryImages(allImages).catch(() => {});
+
+    res.json({ message: "Product deleted", id: req.params.id });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/inventory/:id/articles (admin only) — add a new variant to an
+// existing product (e.g., the same Aviator model in a new color).
+async function addArticle(req, res, next) {
+  try {
+    const product = await Inventory.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    if (req.body.price === undefined) {
+      return res.status(400).json({ message: "Price is required" });
     }
 
-    res.json({ message: "Item deleted", id: req.params.id });
+    const sku = await generateInventorySku(product.category);
+    product.articles.push({ ...req.body, sku });
+    await product.save();
+
+    await logAudit({
+      entityType: "Inventory",
+      entityId: product._id,
+      action: "update",
+      user: req.user,
+      summary: `Article added to ${product.name}: ${sku}`,
+    });
+
+    res.status(201).json({ item: product });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/inventory/:id/articles/:articleId (admin only)
+async function updateArticle(req, res, next) {
+  try {
+    const { sku, ...updates } = req.body; // SKU is immutable once assigned
+
+    const product = await Inventory.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    const article = product.articles.id(req.params.articleId);
+    if (!article) return res.status(404).json({ message: "Article not found" });
+
+    const previousImages = [...(article.images || [])];
+    Object.assign(article, updates);
+    await product.save();
+
+    await logAudit({
+      entityType: "Inventory",
+      entityId: product._id,
+      action: "update",
+      user: req.user,
+      summary: `Article updated on ${product.name}: ${article.sku}`,
+    });
+
+    const removedImages = previousImages.filter((url) => !(article.images || []).includes(url));
+    if (removedImages.length > 0) deleteInventoryImages(removedImages).catch(() => {});
+
+    res.json({ item: product });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/inventory/:id/articles/:articleId (admin only)
+async function deleteArticle(req, res, next) {
+  try {
+    const product = await Inventory.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    const article = product.articles.id(req.params.articleId);
+    if (!article) return res.status(404).json({ message: "Article not found" });
+
+    if (product.articles.length <= 1) {
+      return res.status(400).json({
+        message: "Can't delete the last article — delete the whole product instead if it's no longer sold",
+      });
+    }
+
+    const images = [...(article.images || [])];
+    const sku = article.sku;
+    article.deleteOne();
+    await product.save();
+
+    await logAudit({
+      entityType: "Inventory",
+      entityId: product._id,
+      action: "delete",
+      user: req.user,
+      summary: `Article deleted from ${product.name}: ${sku}`,
+    });
+
+    if (images.length > 0) deleteInventoryImages(images).catch(() => {});
+
+    res.json({ item: product });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/inventory/upload-images (admin only) — unchanged: uploads raw
+// files to Blob Storage and returns their URLs, used when adding/editing
+// any article's photos.
+async function uploadImages(req, res, next) {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "No files uploaded" });
+    }
+
+    const urls = await uploadInventoryImages(req.files);
+    res.status(201).json({ urls });
   } catch (err) {
     next(err);
   }
@@ -149,8 +261,12 @@ async function deleteInventory(req, res, next) {
 module.exports = {
   getInventory,
   getInventoryById,
+  getBrands,
   createInventory,
   updateInventory,
   deleteInventory,
+  addArticle,
+  updateArticle,
+  deleteArticle,
   uploadImages,
 };

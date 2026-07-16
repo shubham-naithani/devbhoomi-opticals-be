@@ -9,6 +9,7 @@ const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = 
 // Shared core: validates stock, decrements it, builds order line items —
 // used by both the customer self-checkout and the admin walk-in flow so
 // stock-safety logic only lives in one place.
+// `items` here are { inventoryItem: <productId>, articleId, quantity }.
 async function buildOrderItemsAndDeductStock(items, session) {
   let orderItems = [];
   let totalAmount = 0;
@@ -18,27 +19,43 @@ async function buildOrderItemsAndDeductStock(items, session) {
     if (!product || !product.isActive) {
       throw Object.assign(new Error(`Item no longer available`), { statusCode: 400 });
     }
+
+    const article = product.articles.id(line.articleId);
+    if (!article || !article.isActive) {
+      throw Object.assign(new Error(`Selected variant of "${product.name}" is no longer available`), {
+        statusCode: 400,
+      });
+    }
+
     const quantity = Number(line.quantity) || 1;
-    if (product.stock < quantity) {
+    if (article.stock < quantity) {
       throw Object.assign(
-        new Error(`Not enough stock for "${product.name}" (only ${product.stock} left)`),
+        new Error(`Not enough stock for "${product.name}" (${describeArticle(article)}) — only ${article.stock} left`),
         { statusCode: 400 }
       );
     }
 
-    product.stock -= quantity;
+    article.stock -= quantity;
     await product.save({ session });
 
     orderItems.push({
       inventoryItem: product._id,
-      name: product.name,
-      price: product.price,
+      articleId: article._id,
+      name: `${product.name} — ${describeArticle(article)}`,
+      price: article.price,
       quantity,
     });
-    totalAmount += product.price * quantity;
+    totalAmount += article.price * quantity;
   }
 
   return { orderItems, totalAmount };
+}
+
+// Builds a short human label for a variant, e.g. "Black / Green lens / L".
+// Falls back gracefully if only some attributes are set.
+function describeArticle(article) {
+  const parts = [article.color, article.lensTint, article.size].filter(Boolean);
+  return parts.length > 0 ? parts.join(' / ') : 'Standard';
 }
 
 // Returns an order's items to stock. Guarded by stockRestored so this can
@@ -48,11 +65,13 @@ async function restockOrderItems(order, session) {
   if (order.stockRestored) return;
 
   for (const line of order.items) {
-    await Inventory.findByIdAndUpdate(
-      line.inventoryItem,
-      { $inc: { stock: line.quantity } },
-      { session }
-    );
+    const product = await Inventory.findById(line.inventoryItem).session(session);
+    if (!product) continue; // product/article may have been deleted since — nothing to restock against
+    const article = product.articles.id(line.articleId);
+    if (!article) continue;
+
+    article.stock += line.quantity;
+    await product.save({ session });
   }
   order.stockRestored = true;
 }
@@ -212,10 +231,16 @@ async function getMyOrders(req, res, next) {
 // GET /api/orders (admin/staff) — all orders, optionally filtered by status/source
 async function getAllOrders(req, res, next) {
   try {
-    const { status, source, page = 1, limit = 20 } = req.query;
+    const { status, source, search, page = 1, limit = 20 } = req.query;
     const filter = { isDeleted: { $ne: true } };
     if (status) filter.status = status;
     if (source) filter.source = source;
+    if (search) {
+      filter.$or = [
+        { orderId: { $regex: search, $options: "i" } },
+        { contactPhone: { $regex: search, $options: "i" } },
+      ];
+    }
 
     const skip = (Number(page) - 1) * Number(limit);
 
