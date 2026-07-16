@@ -7,8 +7,12 @@ const orderItemSchema = new mongoose.Schema(
       ref: "Inventory",
       required: true,
     },
-    name: { type: String, required: true },     // snapshot, in case the product changes later
-    price: { type: Number, required: true },     // snapshot of unit price at time of order
+    articleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+    name: { type: String, required: true },     // snapshot, e.g. "Ray-Ban Aviator — Black / Green lens"
+    price: { type: Number, required: true },     // snapshot of the article's unit price at time of order
     quantity: { type: Number, required: true, min: 1 },
   },
   { _id: false }
