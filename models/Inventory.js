@@ -30,6 +30,18 @@ const articleSchema = new mongoose.Schema({
     type: Number,
     min: 0,
   },
+  // MSP — server-computed as costPrice × 1.40 by default, but staff can
+  // manually override it (e.g. a negotiated minimum for a specific
+  // variant). isMspManual tracks whether that override is in effect, so a
+  // later cost change knows whether to recalculate this or leave it alone.
+  mspPrice: {
+    type: Number,
+    min: 0,
+  },
+  isMspManual: {
+    type: Boolean,
+    default: false,
+  },
   // MRP — what the customer pays. Can genuinely differ between articles of
   // the same product (e.g., a gold frame costing more than black).
   price: {

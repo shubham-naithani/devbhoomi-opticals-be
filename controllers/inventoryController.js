@@ -2,6 +2,7 @@ const Inventory = require("../models/Inventory");
 const { generateInventorySku, generateBarcode } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
+const { calculateMrp, calculateMsp } = require("../utils/pricing");
 
 // GET /api/inventory — public: browse products. Admin/staff get inactive
 // products too. `search` matches name/brand (text index) OR a specific
@@ -89,16 +90,35 @@ async function createInventory(req, res, next) {
   try {
     const { name, article, ...productFields } = req.body;
     if (!name) return res.status(400).json({ message: "Product name is required" });
-    if (!article || article.price === undefined) {
-      return res.status(400).json({ message: "At least one article with a price is required" });
+    if (!article || article.costPrice === undefined || article.costPrice === null) {
+      return res.status(400).json({ message: "At least one article with a cost price is required" });
     }
 
     const sku = await generateInventorySku(productFields.category);
     const barcode = await generateBarcode();
+    const costPrice = Number(article.costPrice);
+
+    // MRP is always derived — any `price` the client sent is ignored.
+    // MSP: if the client explicitly supplied mspPrice, that's a manual
+    // override recorded as such; otherwise it's auto-derived from cost.
+    const isMspManual = article.mspPrice !== undefined && article.mspPrice !== null;
+    const mspPrice = isMspManual ? Number(article.mspPrice) : calculateMsp(costPrice);
+
     const item = await Inventory.create({
       name,
       ...productFields,
-      articles: [{ ...article, sku, barcode, barcodeGeneratedAt: new Date() }],
+      articles: [
+        {
+          ...article,
+          sku,
+          barcode,
+          barcodeGeneratedAt: new Date(),
+          costPrice,
+          price: calculateMrp(costPrice),
+          mspPrice,
+          isMspManual,
+        },
+      ],
     });
 
     await logAudit({
@@ -173,13 +193,26 @@ async function addArticle(req, res, next) {
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
 
-    if (req.body.price === undefined) {
-      return res.status(400).json({ message: "Price is required" });
+    if (req.body.costPrice === undefined || req.body.costPrice === null) {
+      return res.status(400).json({ message: "Cost price is required" });
     }
 
     const sku = await generateInventorySku(product.category);
     const barcode = await generateBarcode();
-    product.articles.push({ ...req.body, sku, barcode, barcodeGeneratedAt: new Date() });
+    const costPrice = Number(req.body.costPrice);
+    const isMspManual = req.body.mspPrice !== undefined && req.body.mspPrice !== null;
+    const mspPrice = isMspManual ? Number(req.body.mspPrice) : calculateMsp(costPrice);
+
+    product.articles.push({
+      ...req.body,
+      sku,
+      barcode,
+      barcodeGeneratedAt: new Date(),
+      costPrice,
+      price: calculateMrp(costPrice),
+      mspPrice,
+      isMspManual,
+    });
     await product.save();
 
     await logAudit({
@@ -199,7 +232,9 @@ async function addArticle(req, res, next) {
 // PUT /api/inventory/:id/articles/:articleId (admin only)
 async function updateArticle(req, res, next) {
   try {
-    const { sku, barcode, barcodeGeneratedAt, ...updates } = req.body; // SKU is immutable once assigned
+    // sku, barcode, barcodeGeneratedAt: immutable once assigned.
+    // price: never client-settable — MRP is always server-derived.
+    const { sku, barcode, barcodeGeneratedAt, price, ...updates } = req.body;
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -208,7 +243,38 @@ async function updateArticle(req, res, next) {
     if (!article) return res.status(404).json({ message: "Article not found" });
 
     const previousImages = [...(article.images || [])];
+
+    // Resolve the effective cost after this update, and the resulting
+    // MSP override state, BEFORE applying the raw update — so we can
+    // compute final derived values afterward regardless of what the
+    // client's payload happened to contain.
+    const newCostPrice = updates.costPrice !== undefined ? Number(updates.costPrice) : article.costPrice;
+
+    let isMspManual = article.isMspManual;
+    let mspPrice = article.mspPrice;
+
+    if (updates.mspPrice !== undefined && updates.mspPrice !== null) {
+      // Client explicitly set an MSP value — treat as a manual override.
+      mspPrice = Number(updates.mspPrice);
+      isMspManual = true;
+    } else if (updates.isMspManual === false) {
+      // Explicit reset-to-auto action — clear the override.
+      isMspManual = false;
+    }
+
     Object.assign(article, updates);
+
+    if (newCostPrice !== undefined && newCostPrice !== null) {
+      article.costPrice = newCostPrice;
+      article.price = calculateMrp(newCostPrice); // MRP always overwritten — read-only, derived
+      if (!isMspManual) {
+        mspPrice = calculateMsp(newCostPrice);
+      }
+    }
+
+    article.mspPrice = mspPrice;
+    article.isMspManual = isMspManual;
+
     await product.save();
 
     await logAudit({
