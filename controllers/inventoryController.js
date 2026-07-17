@@ -1,5 +1,5 @@
 const Inventory = require("../models/Inventory");
-const { generateInventorySku } = require("../utils/humanId");
+const { generateInventorySku, generateBarcode } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
 
@@ -23,6 +23,7 @@ async function getInventory(req, res, next) {
         { name: { $regex: search, $options: "i" } },
         { brand: { $regex: search, $options: "i" } },
         { "articles.sku": { $regex: search, $options: "i" } },
+        { "articles.barcode": { $regex: search, $options: "i" } },
       ];
     }
 
@@ -61,6 +62,25 @@ async function getBrands(req, res, next) {
   }
 }
 
+// GET /api/inventory/barcode/:barcode (admin/staff) — the core of the
+// scan-first workflow: a scanner "types" the decoded barcode + Enter into
+// a focused input, which fires this exact-match lookup and returns the
+// specific Product + Article to add to the order/cart immediately.
+async function getArticleByBarcode(req, res, next) {
+  try {
+    const { barcode } = req.params;
+    const product = await Inventory.findOne({ "articles.barcode": barcode });
+    if (!product) {
+      return res.status(404).json({ message: "No item found for this barcode" });
+    }
+
+    const article = product.articles.find((a) => a.barcode === barcode);
+    res.json({ item: product, article });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /api/inventory (admin only) — creates a product together with its
 // first article/variant in one request, matching the existing "add item"
 // form UX (further variants are added afterward via addArticle).
@@ -74,10 +94,11 @@ async function createInventory(req, res, next) {
     }
 
     const sku = await generateInventorySku(productFields.category);
+    const barcode = await generateBarcode();
     const item = await Inventory.create({
       name,
       ...productFields,
-      articles: [{ ...article, sku }],
+      articles: [{ ...article, sku, barcode, barcodeGeneratedAt: new Date() }],
     });
 
     await logAudit({
@@ -85,7 +106,7 @@ async function createInventory(req, res, next) {
       entityId: item._id,
       action: "create",
       user: req.user,
-      summary: `Product created: ${item.name} (first article ${sku})`,
+      summary: `Product created: ${item.name} (first article ${sku}, barcode ${barcode})`,
     });
 
     res.status(201).json({ item });
@@ -157,7 +178,8 @@ async function addArticle(req, res, next) {
     }
 
     const sku = await generateInventorySku(product.category);
-    product.articles.push({ ...req.body, sku });
+    const barcode = await generateBarcode();
+    product.articles.push({ ...req.body, sku, barcode, barcodeGeneratedAt: new Date() });
     await product.save();
 
     await logAudit({
@@ -165,7 +187,7 @@ async function addArticle(req, res, next) {
       entityId: product._id,
       action: "update",
       user: req.user,
-      summary: `Article added to ${product.name}: ${sku}`,
+      summary: `Article added to ${product.name}: ${sku} (barcode ${barcode})`,
     });
 
     res.status(201).json({ item: product });
@@ -177,7 +199,7 @@ async function addArticle(req, res, next) {
 // PUT /api/inventory/:id/articles/:articleId (admin only)
 async function updateArticle(req, res, next) {
   try {
-    const { sku, ...updates } = req.body; // SKU is immutable once assigned
+    const { sku, barcode, barcodeGeneratedAt, ...updates } = req.body; // SKU is immutable once assigned
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -262,6 +284,7 @@ module.exports = {
   getInventory,
   getInventoryById,
   getBrands,
+  getArticleByBarcode,
   createInventory,
   updateInventory,
   deleteInventory,

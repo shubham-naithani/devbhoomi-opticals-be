@@ -4,6 +4,7 @@ const {
   getInventory,
   getInventoryById,
   getBrands,
+  getArticleByBarcode,
   createInventory,
   updateInventory,
   deleteInventory,
@@ -29,6 +30,7 @@ const upload = multer({
 
 // Public catalog browsing (optionalAuth lets an admin/staff see inactive items too)
 router.get("/brands", getBrands);
+router.get("/barcode/:barcode", protect, authorize("admin", "staff"), getArticleByBarcode);
 router.get("/", optionalAuth, getInventory);
 router.get("/:id", optionalAuth, getInventoryById);
 
