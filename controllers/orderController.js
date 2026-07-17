@@ -377,20 +377,28 @@ async function recordPayment(req, res, next) {
       .populate("createdBy", "name");
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    const newTotalPaid = order.amountPaid + addAmount;
-    const changeDue = Math.max(newTotalPaid - order.totalAmount, 0);
-    order.amountPaid = Math.min(newTotalPaid, order.totalAmount);
+    // Only the portion that actually settles the remaining balance counts
+    // as real revenue. Anything tendered beyond that is change handed back
+    // immediately at the counter — same principle as createWalkInOrder —
+    // so it must never be logged to the ledger.
+    const remainingBalance = Math.max(order.totalAmount - order.amountPaid, 0);
+    const appliedAmount = Math.min(addAmount, remainingBalance);
+    const changeDue = Math.max(addAmount - remainingBalance, 0);
+
+    order.amountPaid += appliedAmount; // never exceeds totalAmount
     if (changeDue > 0) order.changeGiven += changeDue;
     await order.save(); // pre-save hook recalculates paymentStatus
 
-    await logTransaction({
-      orderId: order._id,
-      type: "payment",
-      amount: addAmount,
-      method: order.paymentMethod,
-      performedBy: req.user._id,
-      note: `Additional payment on order ${order.orderId}`,
-    });
+    if (appliedAmount > 0) {
+      await logTransaction({
+        orderId: order._id,
+        type: "payment",
+        amount: appliedAmount, // capped — not the raw addAmount
+        method: order.paymentMethod,
+        performedBy: req.user._id,
+        note: `Additional payment on order ${order.orderId}`,
+      });
+    }
 
     await logAudit({
       entityType: "Order",
@@ -437,13 +445,12 @@ async function refundOrder(req, res, next) {
       return res.status(400).json({ message: "No payment was collected on this order — nothing to refund" });
     }
     if (order.refundStatus === "completed") {
-      return res.status(400).json({ message: "This order's refund has already been settled" });
+      return res.status(400).json({ message: "This order's refund has already been fully settled" });
     }
 
     if (mode === "pending") {
       order.refundStatus = "pending";
       await order.save();
-
       await logAudit({
         entityType: "Order",
         entityId: order._id,
@@ -451,14 +458,18 @@ async function refundOrder(req, res, next) {
         user: req.user,
         summary: `Refund marked as pending on order ${order.orderId} (Rs.${order.amountPaid} owed)`,
       });
-
       return res.json({ order });
     }
 
     // mode === "now"
-    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : order.amountPaid;
+    const outstanding = order.amountPaid - order.refundedAmount;
+    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : outstanding;
+
     if (!refundAmount || refundAmount <= 0) {
       return res.status(400).json({ message: "Enter a valid refund amount" });
+    }
+    if (refundAmount > outstanding) {
+      return res.status(400).json({ message: `Refund amount exceeds outstanding balance of Rs.${outstanding}` });
     }
 
     await logTransaction({
@@ -470,9 +481,12 @@ async function refundOrder(req, res, next) {
       note: note || `Refund for cancelled order ${order.orderId}`,
     });
 
-    order.refundStatus = "completed";
-    order.refundedAmount = refundAmount;
+    order.refundedAmount += refundAmount;
     order.refundedAt = new Date();
+    // Only mark fully "completed" once the entire amountPaid has been
+    // refunded — a partial refund leaves the order "pending" so the
+    // remaining balance is still visible and actionable.
+    order.refundStatus = order.refundedAmount >= order.amountPaid ? "completed" : "pending";
     await order.save();
 
     await logAudit({
@@ -480,7 +494,11 @@ async function refundOrder(req, res, next) {
       entityId: order._id,
       action: "update",
       user: req.user,
-      summary: `Refund of Rs.${refundAmount} settled on order ${order.orderId}`,
+      summary:
+        `Refund of Rs.${refundAmount} recorded on order ${order.orderId}` +
+        (order.refundStatus === "pending"
+          ? ` — Rs.${order.amountPaid - order.refundedAmount} still owed`
+          : " — fully settled"),
     });
 
     res.json({ order });
@@ -503,9 +521,14 @@ async function settleRefund(req, res, next) {
       return res.status(400).json({ message: "This order has no pending refund to settle" });
     }
 
-    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : order.amountPaid;
+    const outstanding = order.amountPaid - order.refundedAmount;
+    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : outstanding;
+
     if (!refundAmount || refundAmount <= 0) {
       return res.status(400).json({ message: "Enter a valid refund amount" });
+    }
+    if (refundAmount > outstanding) {
+      return res.status(400).json({ message: `Refund amount exceeds outstanding balance of Rs.${outstanding}` });
     }
 
     await logTransaction({
@@ -517,9 +540,9 @@ async function settleRefund(req, res, next) {
       note: note || `Refund settled for order ${order.orderId}`,
     });
 
-    order.refundStatus = "completed";
-    order.refundedAmount = refundAmount;
+    order.refundedAmount += refundAmount;
     order.refundedAt = new Date();
+    order.refundStatus = order.refundedAmount >= order.amountPaid ? "completed" : "pending";
     await order.save();
 
     await logAudit({
@@ -527,7 +550,11 @@ async function settleRefund(req, res, next) {
       entityId: order._id,
       action: "update",
       user: req.user,
-      summary: `Pending refund of Rs.${refundAmount} settled on order ${order.orderId}`,
+      summary:
+        `Pending refund of Rs.${refundAmount} settled on order ${order.orderId}` +
+        (order.refundStatus === "pending"
+          ? ` — Rs.${order.amountPaid - order.refundedAmount} still owed`
+          : " — fully settled"),
     });
 
     res.json({ order });
