@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const Inventory = require("../models/Inventory");
 const User = require("../models/User");
+const Transaction = require("../models/Transaction");
 const { generateOrderId } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
@@ -76,6 +77,18 @@ async function restockOrderItems(order, session) {
   order.stockRestored = true;
 }
 
+// Records a money movement against an order. This is the single source of
+// truth for revenue/refund reporting — the dashboard reads from Transaction,
+// not from summing Order.totalAmount, so a cancelled order or an unpaid
+// balance never gets counted as real revenue.
+async function logTransaction({ orderId, type, amount, method, performedBy, note }, session) {
+  const docs = await Transaction.create(
+    [{ order: orderId, type, amount, method, performedBy, note }],
+    session ? { session } : {}
+  );
+  return docs[0];
+}
+
 // POST /api/orders (logged-in customer, self-checkout, online)
 async function createOrder(req, res, next) {
   const session = await mongoose.startSession();
@@ -108,6 +121,9 @@ async function createOrder(req, res, next) {
         { session }
       );
       createdOrder = docs[0];
+      // Online checkout is COD-only right now — no payment collected at
+      // creation, so no Transaction yet. Once Razorpay lands, an
+      // online-paid order should log a "payment" transaction here too.
     });
 
     await logAudit({
@@ -151,6 +167,8 @@ async function createWalkInOrder(req, res, next) {
 
     let createdOrder;
     let changeDue = 0;
+    let paidNow = 0;
+    const method = paymentMethod || "cash";
 
     await session.withTransaction(async () => {
       const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session);
@@ -164,7 +182,7 @@ async function createWalkInOrder(req, res, next) {
       // and the change amount is surfaced back to the caller instead of
       // silently disappearing.
       const rawAmount = amountPaid !== undefined && amountPaid !== null ? Number(amountPaid) : totalAmount;
-      const paidNow = Math.max(0, Math.min(rawAmount, totalAmount));
+      paidNow = Math.max(0, Math.min(rawAmount, totalAmount));
       changeDue = Math.max(rawAmount - totalAmount, 0);
 
       const docs = await Order.create(
@@ -176,7 +194,7 @@ async function createWalkInOrder(req, res, next) {
             totalAmount,
             amountPaid: paidNow,
             changeGiven: changeDue,
-            paymentMethod: paymentMethod || "cash",
+            paymentMethod: method,
             status: "confirmed", // in-person sale — no separate confirmation step needed
             source: "in_store",
             createdBy: req.user._id,
@@ -188,6 +206,20 @@ async function createWalkInOrder(req, res, next) {
         { session }
       );
       createdOrder = docs[0];
+
+      if (paidNow > 0) {
+        await logTransaction(
+          {
+            orderId: createdOrder._id,
+            type: "payment",
+            amount: paidNow,
+            method,
+            performedBy: req.user._id,
+            note: `Walk-in order ${orderId} — payment at creation`,
+          },
+          session
+        );
+      }
     });
 
     await logAudit({
@@ -305,13 +337,22 @@ async function updateOrderStatus(req, res, next) {
       entityId: order._id,
       action: "update",
       user: req.user,
-      summary: `Order ${order.orderId} status -> ${status}`,
+      summary:
+        `Order ${order.orderId} status -> ${status}` +
+        (status === "cancelled" && order.amountPaid > 0
+          ? ` — Rs.${order.amountPaid} was collected, refund not yet resolved`
+          : ""),
     });
 
     const customerPhone = order.customer && order.customer.phone;
     notifyOrderStatusChanged(order, customerPhone).catch(() => {});
 
-    res.json({ order });
+    // Flag back to the caller whether a refund still needs handling, so the
+    // frontend can prompt for it right after cancelling instead of the
+    // admin having to notice it later on the orders list.
+    const refundNeeded = status === "cancelled" && order.amountPaid > 0 && order.refundStatus !== "completed";
+
+    res.json({ order, refundNeeded });
   } catch (err) {
     next(err);
   } finally {
@@ -342,6 +383,15 @@ async function recordPayment(req, res, next) {
     if (changeDue > 0) order.changeGiven += changeDue;
     await order.save(); // pre-save hook recalculates paymentStatus
 
+    await logTransaction({
+      orderId: order._id,
+      type: "payment",
+      amount: addAmount,
+      method: order.paymentMethod,
+      performedBy: req.user._id,
+      note: `Additional payment on order ${order.orderId}`,
+    });
+
     await logAudit({
       entityType: "Order",
       entityId: order._id,
@@ -356,6 +406,131 @@ async function recordPayment(req, res, next) {
     notifyPaymentReceived(order, addAmount, customerPhone).catch(() => {});
 
     res.json({ order, changeDue });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/orders/:id/refund (admin/staff) — resolve the refund on a
+// cancelled (or soft-deleted) order that had money collected.
+// Body: { mode: "now" | "pending", amount?, method?, note? }
+// - mode "pending": acknowledges the refund is owed but hasn't happened yet.
+// - mode "now": logs the actual refund transaction immediately.
+// Works retroactively too — this isn't limited to the moment of cancelling,
+// so an order that was cancelled before this feature existed can still be
+// resolved by calling this once, whenever.
+async function refundOrder(req, res, next) {
+  try {
+    const { mode, amount, method, note } = req.body;
+
+    if (!["now", "pending"].includes(mode)) {
+      return res.status(400).json({ message: `mode must be "now" or "pending"` });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    if (!(order.status === "cancelled" || order.isDeleted)) {
+      return res.status(400).json({ message: "Refunds only apply to cancelled or deleted orders" });
+    }
+    if (order.amountPaid <= 0) {
+      return res.status(400).json({ message: "No payment was collected on this order — nothing to refund" });
+    }
+    if (order.refundStatus === "completed") {
+      return res.status(400).json({ message: "This order's refund has already been settled" });
+    }
+
+    if (mode === "pending") {
+      order.refundStatus = "pending";
+      await order.save();
+
+      await logAudit({
+        entityType: "Order",
+        entityId: order._id,
+        action: "update",
+        user: req.user,
+        summary: `Refund marked as pending on order ${order.orderId} (Rs.${order.amountPaid} owed)`,
+      });
+
+      return res.json({ order });
+    }
+
+    // mode === "now"
+    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : order.amountPaid;
+    if (!refundAmount || refundAmount <= 0) {
+      return res.status(400).json({ message: "Enter a valid refund amount" });
+    }
+
+    await logTransaction({
+      orderId: order._id,
+      type: "refund",
+      amount: refundAmount,
+      method: method || order.paymentMethod,
+      performedBy: req.user._id,
+      note: note || `Refund for cancelled order ${order.orderId}`,
+    });
+
+    order.refundStatus = "completed";
+    order.refundedAmount = refundAmount;
+    order.refundedAt = new Date();
+    await order.save();
+
+    await logAudit({
+      entityType: "Order",
+      entityId: order._id,
+      action: "update",
+      user: req.user,
+      summary: `Refund of Rs.${refundAmount} settled on order ${order.orderId}`,
+    });
+
+    res.json({ order });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/orders/:id/settle-refund (admin/staff) — settle a refund that
+// was previously marked "pending", once the cash actually goes back.
+// Body: { amount?, method?, note? }
+async function settleRefund(req, res, next) {
+  try {
+    const { amount, method, note } = req.body;
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    if (order.refundStatus !== "pending") {
+      return res.status(400).json({ message: "This order has no pending refund to settle" });
+    }
+
+    const refundAmount = amount !== undefined && amount !== null ? Number(amount) : order.amountPaid;
+    if (!refundAmount || refundAmount <= 0) {
+      return res.status(400).json({ message: "Enter a valid refund amount" });
+    }
+
+    await logTransaction({
+      orderId: order._id,
+      type: "refund",
+      amount: refundAmount,
+      method: method || order.paymentMethod,
+      performedBy: req.user._id,
+      note: note || `Refund settled for order ${order.orderId}`,
+    });
+
+    order.refundStatus = "completed";
+    order.refundedAmount = refundAmount;
+    order.refundedAt = new Date();
+    await order.save();
+
+    await logAudit({
+      entityType: "Order",
+      entityId: order._id,
+      action: "update",
+      user: req.user,
+      summary: `Pending refund of Rs.${refundAmount} settled on order ${order.orderId}`,
+    });
+
+    res.json({ order });
   } catch (err) {
     next(err);
   }
@@ -420,10 +595,16 @@ async function deleteOrder(req, res, next) {
       entityId: order._id,
       action: "delete",
       user: req.user,
-      summary: `Order ${order.orderId} deleted (soft delete)`,
+      summary:
+        `Order ${order.orderId} deleted (soft delete)` +
+        (order.amountPaid > 0 && order.refundStatus !== "completed"
+          ? ` — Rs.${order.amountPaid} was collected, refund not yet resolved`
+          : ""),
     });
 
-    res.json({ message: "Order deleted", id: order._id });
+    const refundNeeded = order.amountPaid > 0 && order.refundStatus !== "completed";
+
+    res.json({ message: "Order deleted", id: order._id, refundNeeded });
   } catch (err) {
     next(err);
   } finally {
@@ -439,6 +620,8 @@ module.exports = {
   getOrderById,
   updateOrderStatus,
   recordPayment,
+  refundOrder,
+  settleRefund,
   updateOrder,
   deleteOrder,
 };

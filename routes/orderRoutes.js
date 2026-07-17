@@ -9,6 +9,8 @@ const {
   recordPayment,
   updateOrder,
   deleteOrder,
+  refundOrder,
+  settleRefund
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
 
@@ -26,5 +28,7 @@ router.put("/:id", authorize("admin", "staff"), updateOrder);
 router.put("/:id/status", authorize("admin", "staff"), updateOrderStatus);
 router.put("/:id/payment", authorize("admin", "staff"), recordPayment);
 router.delete("/:id", authorize("admin"), deleteOrder); // soft delete — admin only
+router.put("/:id/refund", protect, authorize("admin", "staff"), refundOrder);
+router.put("/:id/settle-refund", protect, authorize("admin", "staff"), settleRefund);
 
 module.exports = router;

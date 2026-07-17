@@ -123,6 +123,21 @@ const orderSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Refund lifecycle for a cancelled/deleted order that had money collected.
+    // "none" = no refund needed yet or already resolved N/A; "pending" =
+    // acknowledged as owed but not yet handed back; "completed" = settled,
+    // with the actual Transaction record backing it up.
+    refundStatus: {
+      type: String,
+      enum: ["none", "pending", "completed"],
+      default: "none",
+    },
+    refundedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    refundedAt: Date,
   },
   { timestamps: true }
 );
