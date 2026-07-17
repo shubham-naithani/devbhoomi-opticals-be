@@ -3,6 +3,20 @@ const { generateInventorySku, generateBarcode } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
 const { calculateMrp, calculateMsp } = require("../utils/pricing");
+const Brand = require("../models/Brand");
+
+// Ensures a brand name is registered in the Brand collection whenever it's
+// used on a product — so the brand persists independently of any single
+// product's lifecycle (e.g. surviving that product later being deleted).
+async function ensureBrandExists(name) {
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  await Brand.updateOne(
+    { name: { $regex: `^${trimmed}$`, $options: "i" } },
+    { $setOnInsert: { name: trimmed } },
+    { upsert: true }
+  );
+}
 
 // GET /api/inventory — public: browse products. Admin/staff get inactive
 // products too. `search` matches name/brand (text index) OR a specific
@@ -52,12 +66,39 @@ async function getInventoryById(req, res, next) {
   }
 }
 
-// GET /api/inventory/brands — distinct brand list, used to power "more from
-// this brand" links and any brand filter dropdown.
+// GET /api/inventory/brands — merges brands seeded ahead of time (Brand
+// collection) with brands already in use on real products, so the
+// autocomplete works whether or not inventory exists yet for a brand.
 async function getBrands(req, res, next) {
   try {
-    const brands = await Inventory.distinct("brand", { isActive: true });
-    res.json({ brands: brands.filter(Boolean).sort() });
+    const [productBrands, seededBrands] = await Promise.all([
+      Inventory.distinct("brand", { isActive: true }),
+      Brand.distinct("name"),
+    ]);
+    const merged = new Set([...productBrands, ...seededBrands].filter(Boolean));
+    res.json({ brands: [...merged].sort() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/inventory/brands (admin only) — add a brand name ahead of any
+// product using it.
+async function addBrand(req, res, next) {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Brand name is required" });
+    }
+    const trimmed = name.trim();
+
+    const existing = await Brand.findOne({ name: { $regex: `^${trimmed}$`, $options: "i" } });
+    if (existing) {
+      return res.status(400).json({ message: "This brand already exists" });
+    }
+
+    const brand = await Brand.create({ name: trimmed });
+    res.status(201).json({ brand });
   } catch (err) {
     next(err);
   }
@@ -77,6 +118,51 @@ async function getArticleByBarcode(req, res, next) {
 
     const article = product.articles.find((a) => a.barcode === barcode);
     res.json({ item: product, article });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/inventory/brands/:brand/defaults (admin/staff) — computes the
+// most common category/frameType/gender among this brand's EXISTING
+// products, purely from real data. No hardcoded brand mapping anywhere —
+// this is what makes it safe to later swap for a real Configuration module
+// (a Brand collection with explicit defaultCategory etc.) without any
+// frontend change: same endpoint shape, just a different data source.
+async function getBrandDefaults(req, res, next) {
+  try {
+    const { brand } = req.params;
+    const products = await Inventory.find(
+      { brand: { $regex: `^${brand}$`, $options: "i" } },
+      "category frameType gender"
+    );
+
+    if (products.length === 0) {
+      return res.json({ defaults: null });
+    }
+
+    function mostCommon(values) {
+      const counts = {};
+      let best = null;
+      let bestCount = 0;
+      for (const v of values) {
+        if (!v) continue;
+        counts[v] = (counts[v] || 0) + 1;
+        if (counts[v] > bestCount) {
+          bestCount = counts[v];
+          best = v;
+        }
+      }
+      return best;
+    }
+
+    res.json({
+      defaults: {
+        category: mostCommon(products.map((p) => p.category)),
+        frameType: mostCommon(products.map((p) => p.frameType)),
+        gender: mostCommon(products.map((p) => p.gender)),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -120,6 +206,7 @@ async function createInventory(req, res, next) {
         },
       ],
     });
+    await ensureBrandExists(item.brand);
 
     await logAudit({
       entityType: "Inventory",
@@ -148,6 +235,8 @@ async function updateInventory(req, res, next) {
     });
     if (!item) return res.status(404).json({ message: "Item not found" });
 
+    await ensureBrandExists(item.brand);
+    
     await logAudit({
       entityType: "Inventory",
       entityId: item._id,
@@ -350,7 +439,9 @@ module.exports = {
   getInventory,
   getInventoryById,
   getBrands,
+  addBrand,
   getArticleByBarcode,
+  getBrandDefaults,
   createInventory,
   updateInventory,
   deleteInventory,
