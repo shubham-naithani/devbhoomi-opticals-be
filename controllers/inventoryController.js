@@ -1,7 +1,22 @@
 const Inventory = require("../models/Inventory");
-const { generateInventorySku } = require("../utils/humanId");
+const { generateInventorySku, generateBarcode } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
+const { calculateMrp, calculateMsp } = require("../utils/pricing");
+const Brand = require("../models/Brand");
+
+// Ensures a brand name is registered in the Brand collection whenever it's
+// used on a product — so the brand persists independently of any single
+// product's lifecycle (e.g. surviving that product later being deleted).
+async function ensureBrandExists(name) {
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  await Brand.updateOne(
+    { name: { $regex: `^${trimmed}$`, $options: "i" } },
+    { $setOnInsert: { name: trimmed } },
+    { upsert: true }
+  );
+}
 
 // GET /api/inventory — public: browse products. Admin/staff get inactive
 // products too. `search` matches name/brand (text index) OR a specific
@@ -23,6 +38,7 @@ async function getInventory(req, res, next) {
         { name: { $regex: search, $options: "i" } },
         { brand: { $regex: search, $options: "i" } },
         { "articles.sku": { $regex: search, $options: "i" } },
+        { "articles.barcode": { $regex: search, $options: "i" } },
       ];
     }
 
@@ -50,12 +66,103 @@ async function getInventoryById(req, res, next) {
   }
 }
 
-// GET /api/inventory/brands — distinct brand list, used to power "more from
-// this brand" links and any brand filter dropdown.
+// GET /api/inventory/brands — merges brands seeded ahead of time (Brand
+// collection) with brands already in use on real products, so the
+// autocomplete works whether or not inventory exists yet for a brand.
 async function getBrands(req, res, next) {
   try {
-    const brands = await Inventory.distinct("brand", { isActive: true });
-    res.json({ brands: brands.filter(Boolean).sort() });
+    const [productBrands, seededBrands] = await Promise.all([
+      Inventory.distinct("brand", { isActive: true }),
+      Brand.distinct("name"),
+    ]);
+    const merged = new Set([...productBrands, ...seededBrands].filter(Boolean));
+    res.json({ brands: [...merged].sort() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/inventory/brands (admin only) — add a brand name ahead of any
+// product using it.
+async function addBrand(req, res, next) {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Brand name is required" });
+    }
+    const trimmed = name.trim();
+
+    const existing = await Brand.findOne({ name: { $regex: `^${trimmed}$`, $options: "i" } });
+    if (existing) {
+      return res.status(400).json({ message: "This brand already exists" });
+    }
+
+    const brand = await Brand.create({ name: trimmed });
+    res.status(201).json({ brand });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/inventory/barcode/:barcode (admin/staff) — the core of the
+// scan-first workflow: a scanner "types" the decoded barcode + Enter into
+// a focused input, which fires this exact-match lookup and returns the
+// specific Product + Article to add to the order/cart immediately.
+async function getArticleByBarcode(req, res, next) {
+  try {
+    const { barcode } = req.params;
+    const product = await Inventory.findOne({ "articles.barcode": barcode });
+    if (!product) {
+      return res.status(404).json({ message: "No item found for this barcode" });
+    }
+
+    const article = product.articles.find((a) => a.barcode === barcode);
+    res.json({ item: product, article });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/inventory/brands/:brand/defaults (admin/staff) — computes the
+// most common category/frameType/gender among this brand's EXISTING
+// products, purely from real data. No hardcoded brand mapping anywhere —
+// this is what makes it safe to later swap for a real Configuration module
+// (a Brand collection with explicit defaultCategory etc.) without any
+// frontend change: same endpoint shape, just a different data source.
+async function getBrandDefaults(req, res, next) {
+  try {
+    const { brand } = req.params;
+    const products = await Inventory.find(
+      { brand: { $regex: `^${brand}$`, $options: "i" } },
+      "category frameType gender"
+    );
+
+    if (products.length === 0) {
+      return res.json({ defaults: null });
+    }
+
+    function mostCommon(values) {
+      const counts = {};
+      let best = null;
+      let bestCount = 0;
+      for (const v of values) {
+        if (!v) continue;
+        counts[v] = (counts[v] || 0) + 1;
+        if (counts[v] > bestCount) {
+          bestCount = counts[v];
+          best = v;
+        }
+      }
+      return best;
+    }
+
+    res.json({
+      defaults: {
+        category: mostCommon(products.map((p) => p.category)),
+        frameType: mostCommon(products.map((p) => p.frameType)),
+        gender: mostCommon(products.map((p) => p.gender)),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -69,23 +176,44 @@ async function createInventory(req, res, next) {
   try {
     const { name, article, ...productFields } = req.body;
     if (!name) return res.status(400).json({ message: "Product name is required" });
-    if (!article || article.price === undefined) {
-      return res.status(400).json({ message: "At least one article with a price is required" });
+    if (!article || article.costPrice === undefined || article.costPrice === null) {
+      return res.status(400).json({ message: "At least one article with a cost price is required" });
     }
 
     const sku = await generateInventorySku(productFields.category);
+    const barcode = await generateBarcode();
+    const costPrice = Number(article.costPrice);
+
+    // MRP is always derived — any `price` the client sent is ignored.
+    // MSP: if the client explicitly supplied mspPrice, that's a manual
+    // override recorded as such; otherwise it's auto-derived from cost.
+    const isMspManual = article.mspPrice !== undefined && article.mspPrice !== null;
+    const mspPrice = isMspManual ? Number(article.mspPrice) : calculateMsp(costPrice);
+
     const item = await Inventory.create({
       name,
       ...productFields,
-      articles: [{ ...article, sku }],
+      articles: [
+        {
+          ...article,
+          sku,
+          barcode,
+          barcodeGeneratedAt: new Date(),
+          costPrice,
+          price: calculateMrp(costPrice),
+          mspPrice,
+          isMspManual,
+        },
+      ],
     });
+    await ensureBrandExists(item.brand);
 
     await logAudit({
       entityType: "Inventory",
       entityId: item._id,
       action: "create",
       user: req.user,
-      summary: `Product created: ${item.name} (first article ${sku})`,
+      summary: `Product created: ${item.name} (first article ${sku}, barcode ${barcode})`,
     });
 
     res.status(201).json({ item });
@@ -107,6 +235,8 @@ async function updateInventory(req, res, next) {
     });
     if (!item) return res.status(404).json({ message: "Item not found" });
 
+    await ensureBrandExists(item.brand);
+    
     await logAudit({
       entityType: "Inventory",
       entityId: item._id,
@@ -152,12 +282,26 @@ async function addArticle(req, res, next) {
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
 
-    if (req.body.price === undefined) {
-      return res.status(400).json({ message: "Price is required" });
+    if (req.body.costPrice === undefined || req.body.costPrice === null) {
+      return res.status(400).json({ message: "Cost price is required" });
     }
 
     const sku = await generateInventorySku(product.category);
-    product.articles.push({ ...req.body, sku });
+    const barcode = await generateBarcode();
+    const costPrice = Number(req.body.costPrice);
+    const isMspManual = req.body.mspPrice !== undefined && req.body.mspPrice !== null;
+    const mspPrice = isMspManual ? Number(req.body.mspPrice) : calculateMsp(costPrice);
+
+    product.articles.push({
+      ...req.body,
+      sku,
+      barcode,
+      barcodeGeneratedAt: new Date(),
+      costPrice,
+      price: calculateMrp(costPrice),
+      mspPrice,
+      isMspManual,
+    });
     await product.save();
 
     await logAudit({
@@ -165,7 +309,7 @@ async function addArticle(req, res, next) {
       entityId: product._id,
       action: "update",
       user: req.user,
-      summary: `Article added to ${product.name}: ${sku}`,
+      summary: `Article added to ${product.name}: ${sku} (barcode ${barcode})`,
     });
 
     res.status(201).json({ item: product });
@@ -177,7 +321,9 @@ async function addArticle(req, res, next) {
 // PUT /api/inventory/:id/articles/:articleId (admin only)
 async function updateArticle(req, res, next) {
   try {
-    const { sku, ...updates } = req.body; // SKU is immutable once assigned
+    // sku, barcode, barcodeGeneratedAt: immutable once assigned.
+    // price: never client-settable — MRP is always server-derived.
+    const { sku, barcode, barcodeGeneratedAt, price, ...updates } = req.body;
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -186,7 +332,38 @@ async function updateArticle(req, res, next) {
     if (!article) return res.status(404).json({ message: "Article not found" });
 
     const previousImages = [...(article.images || [])];
+
+    // Resolve the effective cost after this update, and the resulting
+    // MSP override state, BEFORE applying the raw update — so we can
+    // compute final derived values afterward regardless of what the
+    // client's payload happened to contain.
+    const newCostPrice = updates.costPrice !== undefined ? Number(updates.costPrice) : article.costPrice;
+
+    let isMspManual = article.isMspManual;
+    let mspPrice = article.mspPrice;
+
+    if (updates.mspPrice !== undefined && updates.mspPrice !== null) {
+      // Client explicitly set an MSP value — treat as a manual override.
+      mspPrice = Number(updates.mspPrice);
+      isMspManual = true;
+    } else if (updates.isMspManual === false) {
+      // Explicit reset-to-auto action — clear the override.
+      isMspManual = false;
+    }
+
     Object.assign(article, updates);
+
+    if (newCostPrice !== undefined && newCostPrice !== null) {
+      article.costPrice = newCostPrice;
+      article.price = calculateMrp(newCostPrice); // MRP always overwritten — read-only, derived
+      if (!isMspManual) {
+        mspPrice = calculateMsp(newCostPrice);
+      }
+    }
+
+    article.mspPrice = mspPrice;
+    article.isMspManual = isMspManual;
+
     await product.save();
 
     await logAudit({
@@ -262,6 +439,9 @@ module.exports = {
   getInventory,
   getInventoryById,
   getBrands,
+  addBrand,
+  getArticleByBarcode,
+  getBrandDefaults,
   createInventory,
   updateInventory,
   deleteInventory,

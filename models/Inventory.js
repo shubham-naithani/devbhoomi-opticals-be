@@ -9,6 +9,19 @@ const articleSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  // Distinct from SKU — SKU is a human-facing catalog code, barcode is what
+  // a physical scanner reads off a printed tag. Immutable at the schema
+  // level: once a barcode is printed onto a tag, it can never be reassigned
+  // to a different article without invalidating tags already on the shelf.
+  barcode: {
+    type: String,
+    trim: true,
+    immutable: true,
+  },
+  barcodeGeneratedAt: {
+    type: Date,
+    immutable: true,
+  },
   color: { type: String, trim: true },
   lensTint: { type: String, trim: true },
   size: { type: String, trim: true },
@@ -16,6 +29,18 @@ const articleSchema = new mongoose.Schema({
   costPrice: {
     type: Number,
     min: 0,
+  },
+  // MSP — server-computed as costPrice × 1.40 by default, but staff can
+  // manually override it (e.g. a negotiated minimum for a specific
+  // variant). isMspManual tracks whether that override is in effect, so a
+  // later cost change knows whether to recalculate this or leave it alone.
+  mspPrice: {
+    type: Number,
+    min: 0,
+  },
+  isMspManual: {
+    type: Boolean,
+    default: false,
   },
   // MRP — what the customer pays. Can genuinely differ between articles of
   // the same product (e.g., a gold frame costing more than black).
@@ -43,6 +68,11 @@ const articleSchema = new mongoose.Schema({
 // SKUs must be unique across every article, in every product — this index
 // on the nested array field enforces that at the database level.
 articleSchema.index({ sku: 1 }, { unique: true, sparse: true });
+// Sparse + unique: fast exact-match lookup for the scan workflow, and
+// guarantees no two articles can ever share a barcode — while still
+// allowing existing articles (created before this feature) to have no
+// barcode at all without violating the unique constraint.
+articleSchema.index({ barcode: 1 }, { unique: true, sparse: true });
 
 const inventorySchema = new mongoose.Schema(
   {
