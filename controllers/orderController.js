@@ -7,6 +7,20 @@ const { generateOrderId } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
 
+// Explicit state machine — Cancelled is reachable from every non-terminal
+// status; Delivered and Cancelled are both terminal (no further transitions
+// once reached). Enforced here so an invalid transition is rejected even if
+// the frontend dropdown is bypassed and the API is hit directly.
+const STATUS_TRANSITIONS = {
+  pending: ["confirmed", "cancelled"],
+  confirmed: ["in_progress", "cancelled"],
+  in_progress: ["ready_for_pickup", "cancelled"],
+  ready_for_pickup: ["delivered", "cancelled"],
+  delivered: [],
+  cancelled: [],
+};
+const ALL_STATUSES = Object.keys(STATUS_TRANSITIONS);
+
 // Shared core: validates stock, decrements it, builds order line items —
 // used by both the customer self-checkout and the admin walk-in flow so
 // stock-safety logic only lives in one place.
@@ -312,15 +326,29 @@ async function updateOrderStatus(req, res, next) {
   const session = await mongoose.startSession();
   try {
     const { status } = req.body;
-    const allowed = ["pending", "confirmed", "delivered", "cancelled"];
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ message: `Status must be one of: ${allowed.join(", ")}` });
+    if (!ALL_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Status must be one of: ${ALL_STATUSES.join(", ")}` });
     }
 
     const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
       .populate("customer", "name email phone")
       .populate("createdBy", "name");
     if (!order) return res.status(404).json({ message: "Order not found" });
+
+    if (status === order.status) {
+      return res.status(400).json({ message: `Order is already ${status}` });
+    }
+
+    const allowedNext = STATUS_TRANSITIONS[order.status] || [];
+    if (!allowedNext.includes(status)) {
+      return res.status(400).json({
+        message: `Cannot move from "${order.status}" to "${status}". ${
+          allowedNext.length
+            ? `Allowed next step(s): ${allowedNext.join(", ")}`
+            : `"${order.status}" is a final status — no further changes allowed`
+        }`,
+      });
+    }
 
     await session.withTransaction(async () => {
       // Cancelling an order returns its items to stock — otherwise inventory
@@ -347,9 +375,6 @@ async function updateOrderStatus(req, res, next) {
     const customerPhone = order.customer && order.customer.phone;
     notifyOrderStatusChanged(order, customerPhone).catch(() => {});
 
-    // Flag back to the caller whether a refund still needs handling, so the
-    // frontend can prompt for it right after cancelling instead of the
-    // admin having to notice it later on the orders list.
     const refundNeeded = status === "cancelled" && order.amountPaid > 0 && order.refundStatus !== "completed";
 
     res.json({ order, refundNeeded });
