@@ -13,6 +13,7 @@ const orderItemSchema = new mongoose.Schema(
     },
     name: { type: String, required: true },     // snapshot, e.g. "Ray-Ban Aviator — Black / Green lens"
     price: { type: Number, required: true },     // snapshot of the article's unit price at time of order
+    costPrice: { type: Number },                  // NEW — cost snapshot at time of sale, for accurate historical P&L
     quantity: { type: Number, required: true, min: 1 },
   },
   { _id: false }
@@ -40,6 +41,16 @@ const orderSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    totalAmount: {
+    type: Number,
+    required: true,
+    min: 0,
+  },
+  shippingCharge: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
     // How much the customer has actually paid so far. For a full walk-in
     // payment this equals totalAmount; for an advance/deposit it's less.
     amountPaid: {
@@ -57,7 +68,7 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["cod", "cash", "card", "upi"],
+      enum: ["cod", "cash", "card", "upi", "razorpay"],
       default: "cod",
     },
     status: {
@@ -123,6 +134,12 @@ const orderSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // Razorpay correlation — set once a payment attempt begins, used to match
+    // the webhook/verify callback back to the right order, and as an
+    // idempotency guard so a payment can never be processed twice.
+    razorpayOrderId: { type: String },
+    razorpayPaymentId: { type: String },
+    razorpayQrCodeId: { type: String },
     // Refund lifecycle for a cancelled/deleted order that had money collected.
     // "none" = no refund needed yet or already resolved N/A; "pending" =
     // acknowledged as owed but not yet handed back; "completed" = settled,

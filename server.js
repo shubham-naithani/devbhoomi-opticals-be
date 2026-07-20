@@ -13,12 +13,15 @@ const customerRoutes = require("./routes/customerRoutes");
 const eyeTestRoutes = require("./routes/eyeTestRoutes");
 const auditLogRoutes = require("./routes/auditLogRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+const transactionRoutes = require("./routes/transactionRoutes");
 
 const app = express();
 
 app.use(cors({
    origin: 'https://polite-hill-0a1070300.7.azurestaticapps.net'
 }));
+
 app.use(express.json());
 app.use(morgan("dev"));
 
@@ -32,6 +35,8 @@ app.use("/api/customers", customerRoutes);
 app.use("/api/eye-tests", eyeTestRoutes);
 app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/transactions", transactionRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
