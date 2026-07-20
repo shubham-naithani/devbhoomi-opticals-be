@@ -5,7 +5,9 @@ const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const { generateOrderId } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
+const { logTransaction } = require("../utils/transactionLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
+const { SHIPPING_FEE } = require("../utils/pricing");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
@@ -58,6 +60,7 @@ async function buildOrderItemsAndDeductStock(items, session) {
       articleId: article._id,
       name: `${product.name} — ${describeArticle(article)}`,
       price: article.price,
+      costPrice: article.costPrice ?? undefined, // snapshot — may be missing on older articles without a cost set
       quantity,
     });
     totalAmount += article.price * quantity;
@@ -91,18 +94,6 @@ async function restockOrderItems(order, session) {
   order.stockRestored = true;
 }
 
-// Records a money movement against an order. This is the single source of
-// truth for revenue/refund reporting — the dashboard reads from Transaction,
-// not from summing Order.totalAmount, so a cancelled order or an unpaid
-// balance never gets counted as real revenue.
-async function logTransaction({ orderId, type, amount, method, performedBy, note }, session) {
-  const docs = await Transaction.create(
-    [{ order: orderId, type, amount, method, performedBy, note }],
-    session ? { session } : {}
-  );
-  return docs[0];
-}
-
 // POST /api/orders (logged-in customer, self-checkout, online)
 async function createOrder(req, res, next) {
   const session = await mongoose.startSession();
@@ -116,7 +107,7 @@ async function createOrder(req, res, next) {
     let createdOrder;
 
     await session.withTransaction(async () => {
-      const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session);
+      const { orderItems, totalAmount: itemsTotal } = await buildOrderItemsAndDeductStock(items, session);
       const orderId = await generateOrderId();
 
       const docs = await Order.create(
@@ -125,7 +116,8 @@ async function createOrder(req, res, next) {
             orderId,
             customer: req.user._id,
             items: orderItems,
-            totalAmount,
+            totalAmount: itemsTotal + SHIPPING_FEE, // includes flat shipping — regardless of eventual payment method
+            shippingCharge: SHIPPING_FEE,
             shippingAddress,
             contactPhone,
             notes,
@@ -135,9 +127,6 @@ async function createOrder(req, res, next) {
         { session }
       );
       createdOrder = docs[0];
-      // Online checkout is COD-only right now — no payment collected at
-      // creation, so no Transaction yet. Once Razorpay lands, an
-      // online-paid order should log a "payment" transaction here too.
     });
 
     await logAudit({
