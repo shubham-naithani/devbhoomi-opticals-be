@@ -1,117 +1,127 @@
 /**
- * WhatsApp notification service.
+ * WhatsApp notifications via Meta's WhatsApp Cloud API.
  *
- * Real sending requires a WhatsApp Business API connection — either Meta's
- * official Cloud API directly, or a provider (Twilio, Gupshup, AiSensy,
- * Interakt, etc.) sitting in front of it. That needs a Meta Business account,
- * a verified phone number, and approved message templates — none of which
- * exist yet for this store.
+ * Falls back to console-log "stub mode" whenever WHATSAPP_ENABLED isn't
+ * exactly "true", or the token/phone number ID env vars are missing — so
+ * the rest of the app (order creation, status updates, payments) never
+ * breaks just because WhatsApp isn't configured yet or Meta is down.
  *
- * Until WHATSAPP_ENABLED=true and the required env vars are set, every call
- * here just logs what WOULD have been sent, so the rest of the app can be
- * built and tested against this service today, and switched on for real the
- * moment credentials exist — no code changes needed elsewhere.
- *
- * To go live with Meta's Cloud API, set in .env:
- *   WHATSAPP_ENABLED=true
- *   WHATSAPP_TOKEN=<permanent access token>
- *   WHATSAPP_PHONE_NUMBER_ID=<from Meta Business dashboard>
+ * All business-initiated messages (order confirmed, status changed,
+ * payment received) require a pre-approved WhatsApp message template —
+ * free-form text is only allowed as a REPLY within 24h of the customer
+ * messaging first, which doesn't apply here. Template names are read from
+ * env vars so approved names can be swapped in later without a code change.
  */
 
-const ENABLED = String(process.env.WHATSAPP_ENABLED).toLowerCase() === "true";
-const TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-const ADMIN_NOTIFY_PHONE = process.env.ADMIN_NOTIFY_PHONE; // owner's WhatsApp number
+// Matches the same human-readable labels already used in the admin
+// frontend's status dropdown — keeps customer-facing wording consistent
+// with what staff see internally.
+const STATUS_LABELS = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  in_progress: "In Progress",
+  ready_for_pickup: "Ready for Pickup",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+};
 
-async function sendWhatsAppMessage(toPhone, message) {
-  if (!toPhone) return;
+const GRAPH_API_VERSION = "v20.0";
 
-  if (!ENABLED || !TOKEN || !PHONE_NUMBER_ID) {
-    console.log(`[WhatsApp:stub] Would send to ${toPhone} -> "${message}"`);
-    return { simulated: true };
+function isConfigured() {
+  return (
+    process.env.WHATSAPP_ENABLED === "true" &&
+    !!process.env.WHATSAPP_TOKEN &&
+    !!process.env.WHATSAPP_PHONE_NUMBER_ID
+  );
+}
+
+// WhatsApp requires E.164-ish numbers (country code, no symbols/spaces).
+// Defaults to India (+91) if a 10-digit local number is passed in, since
+// that's what's stored today (e.g. "9876543210") — adjust the default
+// country code here if the store ever serves outside India.
+function formatPhone(phone) {
+  if (!phone) return null;
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length > 10) return digits; // already has a country code
+  return null;
+}
+
+async function sendTemplateMessage(toPhone, templateName, languageCode, parameters) {
+  const formattedPhone = formatPhone(toPhone);
+  if (!formattedPhone) {
+    console.log(`[WhatsApp] Skipped — no valid phone number for template "${templateName}"`);
+    return;
   }
 
+  if (!isConfigured()) {
+    console.log(
+      `[WhatsApp STUB] Would send template "${templateName}" to ${formattedPhone} with params:`,
+      parameters
+    );
+    return;
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const body = {
+    messaging_product: "whatsapp",
+    to: formattedPhone,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode || "en" },
+      components: [
+        {
+          type: "body",
+          parameters: parameters.map((text) => ({ type: "text", text: String(text) })),
+        },
+      ],
+    },
+  };
+
   try {
-    const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: toPhone,
-        type: "text",
-        text: { body: message },
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
-      const errBody = await res.text();
-      console.error(`[WhatsApp] Send failed (${res.status}):`, errBody);
-      return { simulated: false, success: false };
+      const errText = await res.text();
+      console.error(`[WhatsApp] Failed to send "${templateName}" to ${formattedPhone}:`, errText);
     }
-
-    return { simulated: false, success: true };
   } catch (err) {
-    console.error("[WhatsApp] Send error:", err.message);
-    return { simulated: false, success: false };
+    // Never throw — every call site already treats this as fire-and-forget
+    // (.catch(() => {})), but logging here too helps spot real delivery
+    // problems rather than them silently vanishing.
+    console.error(`[WhatsApp] Network error sending "${templateName}":`, err.message);
   }
 }
 
-// ---- Order lifecycle message templates -----------------------------------
+function formatStatusLabel(status) {
+  return STATUS_LABELS[status] || status;
+}
+
+// ---- Public API — signatures match existing orderController.js call sites ----
 
 async function notifyOrderCreated(order, customerPhone) {
-  const balance = order.totalAmount - order.amountPaid;
-  const paymentLine =
-    order.amountPaid >= order.totalAmount
-      ? `Paid in full: Rs.${order.amountPaid}.`
-      : order.amountPaid > 0
-      ? `Advance received: Rs.${order.amountPaid}. Balance due: Rs.${balance}.`
-      : `Balance due: Rs.${order.totalAmount}.`;
-
-  const message =
-    `Hi! Your order ${order.orderId} at Devbhoomi Opticals has been placed. ` +
-    `Total: Rs.${order.totalAmount}. ${paymentLine}`;
-
-  await sendWhatsAppMessage(customerPhone, message);
-
-  if (ADMIN_NOTIFY_PHONE) {
-    await sendWhatsAppMessage(
-      ADMIN_NOTIFY_PHONE,
-      `New order ${order.orderId} placed (${order.source}) — Rs.${order.totalAmount}. ${paymentLine}`
-    );
-  }
-}
-
-async function notifyPaymentReceived(order, amountJustPaid, customerPhone) {
-  const balance = order.totalAmount - order.amountPaid;
-  const message =
-    balance > 0
-      ? `Payment received: Rs.${amountJustPaid} towards order ${order.orderId}. Remaining balance: Rs.${balance}.`
-      : `Payment received: Rs.${amountJustPaid} towards order ${order.orderId}. Fully paid — thank you!`;
-
-  await sendWhatsAppMessage(customerPhone, message);
-
-  if (ADMIN_NOTIFY_PHONE) {
-    await sendWhatsAppMessage(ADMIN_NOTIFY_PHONE, `Payment of Rs.${amountJustPaid} recorded on order ${order.orderId}.`);
-  }
+  const templateName = process.env.WHATSAPP_TEMPLATE_ORDER_CREATED || "order_created";
+  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, order.totalAmount]);
 }
 
 async function notifyOrderStatusChanged(order, customerPhone) {
-  const statusText = {
-    pending: "is pending confirmation",
-    confirmed: "has been confirmed",
-    delivered: "has been delivered — thank you!",
-    cancelled: "has been cancelled",
-  }[order.status] || `status changed to ${order.status}`;
-
-  const message = `Update: your order ${order.orderId} at Devbhoomi Opticals ${statusText}.`;
-  await sendWhatsAppMessage(customerPhone, message);
-
-  if (ADMIN_NOTIFY_PHONE) {
-    await sendWhatsAppMessage(ADMIN_NOTIFY_PHONE, `Order ${order.orderId} status -> ${order.status}.`);
-  }
+  const templateName = process.env.WHATSAPP_TEMPLATE_STATUS_CHANGED || "order_status_changed";
+  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, formatStatusLabel(order.status)]);
 }
 
-module.exports = { sendWhatsAppMessage, notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived };
+async function notifyPaymentReceived(order, amount, customerPhone) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_PAYMENT_RECEIVED || "payment_received";
+  const balanceDue = Math.max(order.totalAmount - order.amountPaid, 0);
+  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, amount, balanceDue]);
+}
+
+module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived };
