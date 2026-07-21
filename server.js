@@ -4,6 +4,8 @@ const cors = require("cors");
 const morgan = require("morgan");
 const connectDB = require("./config/db");
 const { errorHandler, notFound } = require("./middleware/errorHandler");
+const cron = require("node-cron");
+const { runLowStockCheck } = require("./jobs/lowStockCheck");
 
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
@@ -44,6 +46,13 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
   app.listen(PORT, () => console.log(`Devbhoomi Opticals API running on port ${PORT}`));
+});
+
+// Runs every day at 9:00 AM server time. Adjust the cron expression if
+// your server's timezone differs from IST, or if a different time suits
+// the store's opening hours better.
+cron.schedule("0 9 * * *", () => {
+  runLowStockCheck().catch((err) => console.error("[LowStockCheck] Failed:", err));
 });
 
 module.exports = app;

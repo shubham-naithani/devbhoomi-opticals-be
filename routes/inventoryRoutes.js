@@ -14,6 +14,9 @@ const {
   updateArticle,
   deleteArticle,
   uploadImages,
+  triggerLowStockCheck,
+  bulkUpdateInventoryStatus,
+  bulkDeleteInventory,
 } = require("../controllers/inventoryController");
 const { protect, authorize, optionalAuth } = require("../middleware/auth");
 
@@ -35,6 +38,16 @@ router.get("/brands", getBrands);
 router.post("/brands", protect, authorize("admin"), addBrand);
 router.get("/brands/:brand/defaults", protect, authorize("admin", "staff"), getBrandDefaults);
 router.get("/barcode/:barcode", protect, authorize("admin", "staff"), getArticleByBarcode);
+
+// Bulk actions — registered BEFORE "/:id" routes. "/bulk" as a single path
+// segment would otherwise be swallowed by "/:id" (Express/Mongoose would
+// try to treat the literal string "bulk" as an ObjectId and throw a
+// CastError) since both are single-segment paths matched in registration order.
+router.put("/bulk/status", protect, authorize("admin"), bulkUpdateInventoryStatus);
+router.delete("/bulk", protect, authorize("admin"), bulkDeleteInventory);
+
+router.post("/low-stock-check", protect, authorize("admin"), triggerLowStockCheck);
+
 router.get("/", optionalAuth, getInventory);
 router.get("/:id", optionalAuth, getInventoryById);
 

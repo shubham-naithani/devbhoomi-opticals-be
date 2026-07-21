@@ -653,6 +653,137 @@ async function deleteOrder(req, res, next) {
   }
 }
 
+// PUT /api/orders/bulk/status (admin/staff) — bulk status update. Since
+// selected orders can each be in different states, this applies the
+// change wherever it's a VALID transition and clearly reports what was
+// skipped and why, rather than either failing everything or silently
+// ignoring invalid ones.
+// Body: { ids: [...], status: "in_progress" }
+async function bulkUpdateOrderStatus(req, res, next) {
+  try {
+    const { ids, status } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "Provide at least one order id" });
+    }
+    if (!ALL_STATUSES.includes(status)) {
+      return res.status(400).json({ message: `Status must be one of: ${ALL_STATUSES.join(", ")}` });
+    }
+
+    const orders = await Order.find({ _id: { $in: ids }, isDeleted: { $ne: true } }).populate(
+      "customer",
+      "name phone"
+    );
+
+    const updated = [];
+    const skipped = [];
+
+    for (const order of orders) {
+      if (status === order.status) {
+        skipped.push({ orderId: order.orderId, reason: `Already ${status}` });
+        continue;
+      }
+      const allowedNext = STATUS_TRANSITIONS[order.status] || [];
+      if (!allowedNext.includes(status)) {
+        skipped.push({ orderId: order.orderId, reason: `Cannot move from "${order.status}" to "${status}"` });
+        continue;
+      }
+
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          if (status === "cancelled" && !order.stockRestored) {
+            await restockOrderItems(order, session);
+          }
+          order.status = status;
+          await order.save({ session });
+        });
+
+        await logAudit({
+          entityType: "Order",
+          entityId: order._id,
+          action: "update",
+          user: req.user,
+          summary: `Order ${order.orderId} status -> ${status} (bulk action)`,
+        });
+
+        const customerPhone = order.customer && order.customer.phone;
+        notifyOrderStatusChanged(order, customerPhone).catch(() => {});
+
+        updated.push(order.orderId);
+      } finally {
+        session.endSession();
+      }
+    }
+
+    const foundIds = orders.map((o) => o._id.toString());
+    const notFoundCount = ids.filter((id) => !foundIds.includes(id)).length;
+
+    res.json({
+      updated,
+      skipped,
+      notFoundCount,
+      message: `${updated.length} order(s) updated${skipped.length ? `, ${skipped.length} skipped` : ""}`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/orders/bulk (admin only) — bulk soft delete, same restock
+// safety and refund-needed flagging as the single-order delete.
+// Body: { ids: [...] }
+async function bulkDeleteOrders(req, res, next) {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "Provide at least one order id" });
+    }
+
+    const orders = await Order.find({ _id: { $in: ids }, isDeleted: { $ne: true } });
+
+    const deleted = [];
+    const refundNeededOrderIds = [];
+
+    for (const order of orders) {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          if (!order.stockRestored) {
+            await restockOrderItems(order, session);
+          }
+          order.isDeleted = true;
+          order.deletedAt = new Date();
+          order.deletedBy = req.user._id;
+          await order.save({ session });
+        });
+
+        await logAudit({
+          entityType: "Order",
+          entityId: order._id,
+          action: "delete",
+          user: req.user,
+          summary: `Order ${order.orderId} deleted (bulk action)`,
+        });
+
+        deleted.push(order.orderId);
+        if (order.amountPaid > 0 && order.refundStatus !== "completed") {
+          refundNeededOrderIds.push(order.orderId);
+        }
+      } finally {
+        session.endSession();
+      }
+    }
+
+    res.json({
+      deleted,
+      refundNeededOrderIds,
+      message: `${deleted.length} order(s) deleted`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   createOrder,
   createWalkInOrder,
@@ -665,4 +796,6 @@ module.exports = {
   settleRefund,
   updateOrder,
   deleteOrder,
+  bulkUpdateOrderStatus,
+  bulkDeleteOrders, 
 };
