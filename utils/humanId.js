@@ -51,4 +51,10 @@ async function generateBarcode() {
   return `89${pad(seq, 11)}`;
 }
 
-module.exports = { getNextSequence, generateOrderId, generateInventorySku, generateBarcode };
+async function generatePurchaseId() {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`purchase-${year}`);
+  return `PUR-${year}-${pad(seq, 6)}`;
+}
+
+module.exports = { getNextSequence, generateOrderId, generateInventorySku, generateBarcode, generatePurchaseId };

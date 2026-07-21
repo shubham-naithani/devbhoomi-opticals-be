@@ -2,6 +2,7 @@ const Order = require("../models/Order");
 const Inventory = require("../models/Inventory");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
+const { LOW_STOCK_THRESHOLD } = require("../jobs/lowStockCheck");
 
 async function getDashboardStats(req, res, next) {
   try {
@@ -121,7 +122,8 @@ async function getDashboardStats(req, res, next) {
     const lowStockItems = [];
     inventoryDocs.forEach((doc) => {
       (doc.articles || []).forEach((a) => {
-        if (a.stock <= 5 && a.isActive) {
+        const effectiveThreshold = a.lowStockThreshold ?? LOW_STOCK_THRESHOLD;
+        if (a.stock <= effectiveThreshold && a.isActive) {
           lowStockItems.push({ productId: doc._id, name: doc.name, sku: a.sku, stock: a.stock });
         }
       });

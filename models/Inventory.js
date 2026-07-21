@@ -55,6 +55,10 @@ const articleSchema = new mongoose.Schema({
     min: 0,
     default: 0,
   },
+  lowStockThreshold: {
+    type: Number,
+    min: 0,
+  },
   images: {
     type: [String],
     default: [],
