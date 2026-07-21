@@ -19,11 +19,15 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
 const purchaseRoutes = require("./routes/purchaseRoutes");
 const stockMovementRoutes = require("./routes/stockMovementRoutes");
+const couponRoutes = require("./routes/couponRoutes");
 
 const app = express();
 
+// app.use(cors({
+//    origin: 'https://polite-hill-0a1070300.7.azurestaticapps.net'
+// }));
 app.use(cors({
-   origin: 'https://polite-hill-0a1070300.7.azurestaticapps.net'
+   origin: '*'
 }));
 
 app.use(express.json());
@@ -43,6 +47,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/transactions", transactionRoutes);
 app.use("/api/purchases", purchaseRoutes);
 app.use("/api/stock-movements", stockMovementRoutes);
+app.use("/api/coupons", couponRoutes);
 app.use(notFound);
 app.use(errorHandler);
 

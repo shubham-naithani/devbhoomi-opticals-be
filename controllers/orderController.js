@@ -9,6 +9,8 @@ const { logTransaction } = require("../utils/transactionLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
 const { SHIPPING_FEE } = require("../utils/pricing");
 const { logStockMovement } = require("../utils/stockMovementLogger");
+const { validateAndApplyCoupon } = require("../utils/couponEngine");
+const Coupon = require("../models/Coupon");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
@@ -78,6 +80,7 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       name: `${product.name} — ${describeArticle(article)}`,
       price: article.price,
       costPrice: article.costPrice ?? undefined,
+      mspPrice: article.mspPrice ?? undefined,
       quantity,
     });
     totalAmount += article.price * quantity;
@@ -133,7 +136,7 @@ async function restockOrderItems(order, session, performedBy) {
 async function createOrder(req, res, next) {
   const session = await mongoose.startSession();
   try {
-    const { items, shippingAddress, contactPhone, notes } = req.body;
+    const { items, shippingAddress, contactPhone, notes, couponCode } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "Cart is empty" });
@@ -143,6 +146,9 @@ async function createOrder(req, res, next) {
 
     await session.withTransaction(async () => {
       const { orderItems, totalAmount: itemsTotal } = await buildOrderItemsAndDeductStock(items, session, req.user._id);
+
+      const { coupon, discountAmount } = await validateAndApplyCoupon(couponCode, orderItems, itemsTotal);
+
       const orderId = await generateOrderId();
 
       const docs = await Order.create(
@@ -151,8 +157,10 @@ async function createOrder(req, res, next) {
             orderId,
             customer: req.user._id,
             items: orderItems,
-            totalAmount: itemsTotal + SHIPPING_FEE, // includes flat shipping — regardless of eventual payment method
+            totalAmount: Math.max(itemsTotal + SHIPPING_FEE - discountAmount, 0),
             shippingCharge: SHIPPING_FEE,
+            couponCode: coupon ? coupon.code : undefined,
+            discountAmount,
             shippingAddress,
             contactPhone,
             notes,
@@ -162,6 +170,10 @@ async function createOrder(req, res, next) {
         { session }
       );
       createdOrder = docs[0];
+
+      if (coupon && discountAmount > 0) {
+        await Coupon.updateOne({ _id: coupon._id }, { $inc: { usageCount: 1 } }, { session });
+      }
     });
 
     await logAudit({
@@ -169,7 +181,9 @@ async function createOrder(req, res, next) {
       entityId: createdOrder._id,
       action: "create",
       user: req.user,
-      summary: `Order ${createdOrder.orderId} placed online`,
+      summary:
+        `Order ${createdOrder.orderId} placed online` +
+        (createdOrder.couponCode ? ` — coupon ${createdOrder.couponCode} applied (₹${createdOrder.discountAmount} off)` : ""),
     });
 
     notifyOrderCreated(createdOrder, req.user.phone).catch(() => {});
@@ -189,7 +203,7 @@ async function createOrder(req, res, next) {
 async function createWalkInOrder(req, res, next) {
   const session = await mongoose.startSession();
   try {
-    const { customerId, items, paymentMethod, amountPaid, prescriptionUsed, notes } = req.body;
+    const { customerId, items, paymentMethod, amountPaid, prescriptionUsed, notes, couponCode } = req.body;
 
     if (!customerId) {
       return res.status(400).json({ message: "Customer is required" });
@@ -208,57 +222,72 @@ async function createWalkInOrder(req, res, next) {
     let paidNow = 0;
     const method = paymentMethod || "cash";
 
-    await session.withTransaction(async () => {
-      const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session, req.user._id);
-      const orderId = await generateOrderId();
+     await session.withTransaction(async () => {
+       const { orderItems, totalAmount: itemsTotal } =
+         await buildOrderItemsAndDeductStock(items, session, req.user._id);
 
-      // Default: fully paid at the counter. If the admin/staff entered a
-      // smaller amountPaid, that's recorded as an advance/deposit instead.
-      // If they entered MORE than the total (cash tendered exceeds the
-      // bill), the excess is change owed back to the customer — the store
-      // never "receives" more than the order total, so amountPaid is capped,
-      // and the change amount is surfaced back to the caller instead of
-      // silently disappearing.
-      const rawAmount = amountPaid !== undefined && amountPaid !== null ? Number(amountPaid) : totalAmount;
-      paidNow = Math.max(0, Math.min(rawAmount, totalAmount));
-      changeDue = Math.max(rawAmount - totalAmount, 0);
+       const { coupon, discountAmount } = await validateAndApplyCoupon(
+         couponCode,
+         orderItems,
+         itemsTotal,
+       );
+       const totalAmount = Math.max(itemsTotal - discountAmount, 0);
 
-      const docs = await Order.create(
-        [
-          {
-            orderId,
-            customer: customer._id,
-            items: orderItems,
-            totalAmount,
-            amountPaid: paidNow,
-            changeGiven: changeDue,
-            paymentMethod: method,
-            status: "confirmed", // in-person sale — no separate confirmation step needed
-            source: "in_store",
-            createdBy: req.user._id,
-            prescriptionUsed: prescriptionUsed || undefined,
-            contactPhone: customer.phone,
-            notes,
-          },
-        ],
-        { session }
-      );
-      createdOrder = docs[0];
+       const orderId = await generateOrderId();
 
-      if (paidNow > 0) {
-        await logTransaction(
-          {
-            orderId: createdOrder._id,
-            type: "payment",
-            amount: paidNow,
-            method,
-            performedBy: req.user._id,
-            note: `Walk-in order ${orderId} — payment at creation`,
-          },
-          session
-        );
-      }
-    });
+       const rawAmount =
+         amountPaid !== undefined && amountPaid !== null
+           ? Number(amountPaid)
+           : totalAmount;
+       paidNow = Math.max(0, Math.min(rawAmount, totalAmount));
+       changeDue = Math.max(rawAmount - totalAmount, 0);
+
+       const docs = await Order.create(
+         [
+           {
+             orderId,
+             customer: customer._id,
+             items: orderItems,
+             totalAmount,
+             couponCode: coupon ? coupon.code : undefined,
+             discountAmount,
+             amountPaid: paidNow,
+             changeGiven: changeDue,
+             paymentMethod: method,
+             status: "confirmed",
+             source: "in_store",
+             createdBy: req.user._id,
+             prescriptionUsed: prescriptionUsed || undefined,
+             contactPhone: customer.phone,
+             notes,
+           },
+         ],
+         { session },
+       );
+       createdOrder = docs[0];
+
+       if (coupon && discountAmount > 0) {
+         await Coupon.updateOne(
+           { _id: coupon._id },
+           { $inc: { usageCount: 1 } },
+           { session },
+         );
+       }
+
+       if (paidNow > 0) {
+         await logTransaction(
+           {
+             orderId: createdOrder._id,
+             type: "payment",
+             amount: paidNow,
+             method,
+             performedBy: req.user._id,
+             note: `Walk-in order ${orderId} — payment at creation`,
+           },
+           session,
+         );
+       }
+     });
 
     await logAudit({
       entityType: "Order",
