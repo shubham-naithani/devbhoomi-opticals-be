@@ -11,12 +11,13 @@ const orderItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
-    name: { type: String, required: true },     // snapshot, e.g. "Ray-Ban Aviator — Black / Green lens"
-    price: { type: Number, required: true },     // snapshot of the article's unit price at time of order
-    costPrice: { type: Number },                  // NEW — cost snapshot at time of sale, for accurate historical P&L
+    name: { type: String, required: true }, // snapshot, e.g. "Ray-Ban Aviator — Black / Green lens"
+    price: { type: Number, required: true }, // snapshot of the article's unit price at time of order
+    costPrice: { type: Number },
+    mspPrice: { type: Number }, // NEW — cost snapshot at time of sale, for accurate historical P&L
     quantity: { type: Number, required: true, min: 1 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const orderSchema = new mongoose.Schema(
@@ -42,15 +43,17 @@ const orderSchema = new mongoose.Schema(
       min: 0,
     },
     totalAmount: {
-    type: Number,
-    required: true,
-    min: 0,
-  },
-  shippingCharge: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    couponCode: { type: String, trim: true },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    shippingCharge: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     // How much the customer has actually paid so far. For a full walk-in
     // payment this equals totalAmount; for an advance/deposit it's less.
     amountPaid: {
@@ -73,7 +76,14 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "confirmed", "in_progress", "ready_for_pickup", "delivered", "cancelled"],
+      enum: [
+        "pending",
+        "confirmed",
+        "in_progress",
+        "ready_for_pickup",
+        "delivered",
+        "cancelled",
+      ],
       default: "pending",
     },
     // Where the order originated — lets reporting split walk-in vs online sales.
@@ -156,7 +166,7 @@ const orderSchema = new mongoose.Schema(
     },
     refundedAt: Date,
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Keep paymentStatus in sync with amountPaid whenever either is set/changed.
