@@ -17,6 +17,7 @@ const auditLogRoutes = require("./routes/auditLogRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
+const purchaseRoutes = require("./routes/purchaseRoutes");
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/transactions", transactionRoutes);
+app.use("/api/purchases", purchaseRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
