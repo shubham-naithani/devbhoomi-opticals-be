@@ -4,6 +4,16 @@ const { logAudit } = require("../utils/auditLogger");
 const { uploadInventoryImages, deleteInventoryImages } = require("../services/blobStorageService");
 const { calculateMrp, calculateMsp } = require("../utils/pricing");
 const Brand = require("../models/Brand");
+const { runLowStockCheck } = require("../jobs/lowStockCheck");
+
+async function triggerLowStockCheck(req, res, next) {
+  try {
+    const result = await runLowStockCheck();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
 
 // Ensures a brand name is registered in the Brand collection whenever it's
 // used on a product — so the brand persists independently of any single
@@ -435,6 +445,80 @@ async function uploadImages(req, res, next) {
   }
 }
 
+// PUT /api/inventory/bulk/status (admin only) — bulk activate/deactivate.
+// Body: { ids: [...], isActive: true|false }
+async function bulkUpdateInventoryStatus(req, res, next) {
+  try {
+    const { ids, isActive } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "Provide at least one product id" });
+    }
+    if (typeof isActive !== "boolean") {
+      return res.status(400).json({ message: "isActive must be true or false" });
+    }
+
+    const products = await Inventory.find({ _id: { $in: ids } }, "name");
+    if (products.length === 0) {
+      return res.status(404).json({ message: "No matching products found" });
+    }
+
+    await Inventory.updateMany({ _id: { $in: ids } }, { $set: { isActive } });
+
+    await Promise.all(
+      products.map((p) =>
+        logAudit({
+          entityType: "Inventory",
+          entityId: p._id,
+          action: "update",
+          user: req.user,
+          summary: `Bulk ${isActive ? "activated" : "deactivated"}: ${p.name}`,
+        })
+      )
+    );
+
+    res.json({ message: `${products.length} product(s) updated`, updatedCount: products.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/inventory/bulk (admin only) — bulk delete products + their images.
+// Body: { ids: [...] }
+async function bulkDeleteInventory(req, res, next) {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: "Provide at least one product id" });
+    }
+
+    const products = await Inventory.find({ _id: { $in: ids } });
+    if (products.length === 0) {
+      return res.status(404).json({ message: "No matching products found" });
+    }
+
+    await Inventory.deleteMany({ _id: { $in: ids } });
+
+    const allImages = products.flatMap((p) => p.articles.flatMap((a) => a.images || []));
+    if (allImages.length > 0) deleteInventoryImages(allImages).catch(() => {});
+
+    await Promise.all(
+      products.map((p) =>
+        logAudit({
+          entityType: "Inventory",
+          entityId: p._id,
+          action: "delete",
+          user: req.user,
+          summary: `Bulk deleted: ${p.name} (${p.articles.length} article(s))`,
+        })
+      )
+    );
+
+    res.json({ message: `${products.length} product(s) deleted`, deletedCount: products.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getInventory,
   getInventoryById,
@@ -449,4 +533,7 @@ module.exports = {
   updateArticle,
   deleteArticle,
   uploadImages,
+  triggerLowStockCheck,
+  bulkUpdateInventoryStatus,
+  bulkDeleteInventory
 };

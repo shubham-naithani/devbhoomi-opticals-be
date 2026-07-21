@@ -124,4 +124,24 @@ async function notifyPaymentReceived(order, amount, customerPhone) {
   await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, amount, balanceDue]);
 }
 
-module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived };
+async function notifyLowStock(items) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_LOW_STOCK || "low_stock_alert";
+  const adminPhone = process.env.ADMIN_NOTIFY_PHONE;
+  if (!adminPhone) {
+    console.log("[WhatsApp] Skipped low-stock alert — ADMIN_NOTIFY_PHONE not set");
+    return;
+  }
+
+  const summary = items
+    .slice(0, 5)
+    .map((i) => `${i.name} (${i.stock} left)`)
+    .join(", ");
+  const moreCount = items.length > 5 ? ` +${items.length - 5} more` : "";
+
+  await sendTemplateMessage(adminPhone, templateName, "en", [
+    items.length,
+    `${summary}${moreCount}`,
+  ]);
+}
+
+module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived, notifyLowStock };
