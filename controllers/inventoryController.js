@@ -5,6 +5,7 @@ const { uploadInventoryImages, deleteInventoryImages } = require("../services/bl
 const { calculateMrp, calculateMsp } = require("../utils/pricing");
 const Brand = require("../models/Brand");
 const { runLowStockCheck } = require("../jobs/lowStockCheck");
+const { logStockMovement } = require("../utils/stockMovementLogger");
 
 async function triggerLowStockCheck(req, res, next) {
   try {
@@ -331,9 +332,7 @@ async function addArticle(req, res, next) {
 // PUT /api/inventory/:id/articles/:articleId (admin only)
 async function updateArticle(req, res, next) {
   try {
-    // sku, barcode, barcodeGeneratedAt: immutable once assigned.
-    // price: never client-settable — MRP is always server-derived.
-    const { sku, barcode, barcodeGeneratedAt, price, ...updates } = req.body;
+    const { sku, barcode, barcodeGeneratedAt, price, stockAdjustmentReason, ...updates } = req.body;
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -342,22 +341,25 @@ async function updateArticle(req, res, next) {
     if (!article) return res.status(404).json({ message: "Article not found" });
 
     const previousImages = [...(article.images || [])];
+    const previousStock = article.stock;
 
-    // Resolve the effective cost after this update, and the resulting
-    // MSP override state, BEFORE applying the raw update — so we can
-    // compute final derived values afterward regardless of what the
-    // client's payload happened to contain.
+    // If stock is actually being changed by hand (not via order/purchase
+    // flows, which never hit this endpoint), a reason is required — this
+    // is the one stock-changing path with no other automatic paper trail.
+    const stockChanged = updates.stock !== undefined && Number(updates.stock) !== previousStock;
+    if (stockChanged && (!stockAdjustmentReason || !stockAdjustmentReason.trim())) {
+      return res.status(400).json({ message: "A reason is required when manually changing stock" });
+    }
+
     const newCostPrice = updates.costPrice !== undefined ? Number(updates.costPrice) : article.costPrice;
 
     let isMspManual = article.isMspManual;
     let mspPrice = article.mspPrice;
 
     if (updates.mspPrice !== undefined && updates.mspPrice !== null) {
-      // Client explicitly set an MSP value — treat as a manual override.
       mspPrice = Number(updates.mspPrice);
       isMspManual = true;
     } else if (updates.isMspManual === false) {
-      // Explicit reset-to-auto action — clear the override.
       isMspManual = false;
     }
 
@@ -365,7 +367,7 @@ async function updateArticle(req, res, next) {
 
     if (newCostPrice !== undefined && newCostPrice !== null) {
       article.costPrice = newCostPrice;
-      article.price = calculateMrp(newCostPrice); // MRP always overwritten — read-only, derived
+      article.price = calculateMrp(newCostPrice);
       if (!isMspManual) {
         mspPrice = calculateMsp(newCostPrice);
       }
@@ -375,6 +377,21 @@ async function updateArticle(req, res, next) {
     article.isMspManual = isMspManual;
 
     await product.save();
+
+    if (stockChanged) {
+      await logStockMovement({
+        inventoryItem: product._id,
+        articleId: article._id,
+        sku: article.sku,
+        productName: product.name,
+        type: "manual_adjustment",
+        quantityChange: article.stock - previousStock,
+        previousStock,
+        newStock: article.stock,
+        reason: stockAdjustmentReason.trim(),
+        performedBy: req.user._id,
+      });
+    }
 
     await logAudit({
       entityType: "Inventory",

@@ -8,6 +8,7 @@ const { logAudit } = require("../utils/auditLogger");
 const { logTransaction } = require("../utils/transactionLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
 const { SHIPPING_FEE } = require("../utils/pricing");
+const { logStockMovement } = require("../utils/stockMovementLogger");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
@@ -27,7 +28,7 @@ const ALL_STATUSES = Object.keys(STATUS_TRANSITIONS);
 // used by both the customer self-checkout and the admin walk-in flow so
 // stock-safety logic only lives in one place.
 // `items` here are { inventoryItem: <productId>, articleId, quantity }.
-async function buildOrderItemsAndDeductStock(items, session) {
+async function buildOrderItemsAndDeductStock(items, session, performedBy) {
   let orderItems = [];
   let totalAmount = 0;
 
@@ -52,15 +53,31 @@ async function buildOrderItemsAndDeductStock(items, session) {
       );
     }
 
+    const previousStock = article.stock;
     article.stock -= quantity;
     await product.save({ session });
+
+    await logStockMovement(
+      {
+        inventoryItem: product._id,
+        articleId: article._id,
+        sku: article.sku,
+        productName: product.name,
+        type: "sale",
+        quantityChange: -quantity,
+        previousStock,
+        newStock: article.stock,
+        performedBy,
+      },
+      session
+    );
 
     orderItems.push({
       inventoryItem: product._id,
       articleId: article._id,
       name: `${product.name} — ${describeArticle(article)}`,
       price: article.price,
-      costPrice: article.costPrice ?? undefined, // snapshot — may be missing on older articles without a cost set
+      costPrice: article.costPrice ?? undefined,
       quantity,
     });
     totalAmount += article.price * quantity;
@@ -79,17 +96,35 @@ function describeArticle(article) {
 // Returns an order's items to stock. Guarded by stockRestored so this can
 // never double-credit inventory, no matter which path (cancel or delete)
 // triggers it, or in what order.
-async function restockOrderItems(order, session) {
+async function restockOrderItems(order, session, performedBy) {
   if (order.stockRestored) return;
 
   for (const line of order.items) {
     const product = await Inventory.findById(line.inventoryItem).session(session);
-    if (!product) continue; // product/article may have been deleted since — nothing to restock against
+    if (!product) continue;
     const article = product.articles.id(line.articleId);
     if (!article) continue;
 
+    const previousStock = article.stock;
     article.stock += line.quantity;
     await product.save({ session });
+
+    await logStockMovement(
+      {
+        inventoryItem: product._id,
+        articleId: article._id,
+        sku: article.sku,
+        productName: product.name,
+        type: "restock_cancelled",
+        quantityChange: line.quantity,
+        previousStock,
+        newStock: article.stock,
+        referenceType: "Order",
+        referenceId: order._id,
+        performedBy,
+      },
+      session
+    );
   }
   order.stockRestored = true;
 }
@@ -107,7 +142,7 @@ async function createOrder(req, res, next) {
     let createdOrder;
 
     await session.withTransaction(async () => {
-      const { orderItems, totalAmount: itemsTotal } = await buildOrderItemsAndDeductStock(items, session);
+      const { orderItems, totalAmount: itemsTotal } = await buildOrderItemsAndDeductStock(items, session, req.user._id);
       const orderId = await generateOrderId();
 
       const docs = await Order.create(
@@ -174,7 +209,7 @@ async function createWalkInOrder(req, res, next) {
     const method = paymentMethod || "cash";
 
     await session.withTransaction(async () => {
-      const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session);
+      const { orderItems, totalAmount } = await buildOrderItemsAndDeductStock(items, session, req.user._id);
       const orderId = await generateOrderId();
 
       // Default: fully paid at the counter. If the admin/staff entered a
@@ -343,7 +378,7 @@ async function updateOrderStatus(req, res, next) {
       // Cancelling an order returns its items to stock — otherwise inventory
       // stays permanently short for a sale that never actually happened.
       if (status === "cancelled" && !order.stockRestored) {
-        await restockOrderItems(order, session);
+        await restockOrderItems(order, session, req.user._id);
       }
       order.status = status;
       await order.save({ session });
@@ -623,7 +658,7 @@ async function deleteOrder(req, res, next) {
 
     await session.withTransaction(async () => {
       if (!order.stockRestored) {
-        await restockOrderItems(order, session);
+        await restockOrderItems(order, session, req.user._id);
       }
       order.isDeleted = true;
       order.deletedAt = new Date();
@@ -692,7 +727,7 @@ async function bulkUpdateOrderStatus(req, res, next) {
       try {
         await session.withTransaction(async () => {
           if (status === "cancelled" && !order.stockRestored) {
-            await restockOrderItems(order, session);
+            await restockOrderItems(order, session, req.user._id);
           }
           order.status = status;
           await order.save({ session });
@@ -749,7 +784,7 @@ async function bulkDeleteOrders(req, res, next) {
       try {
         await session.withTransaction(async () => {
           if (!order.stockRestored) {
-            await restockOrderItems(order, session);
+            await restockOrderItems(order, session, req.user._id);
           }
           order.isDeleted = true;
           order.deletedAt = new Date();

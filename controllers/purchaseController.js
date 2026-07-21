@@ -4,6 +4,7 @@ const PurchaseRecord = require("../models/PurchaseRecord");
 const { generatePurchaseId } = require("../utils/humanId");
 const { calculateMrp, calculateMsp } = require("../utils/pricing");
 const { logAudit } = require("../utils/auditLogger");
+const { logStockMovement } = require("../utils/stockMovementLogger");
 
 // POST /api/purchases (admin only)
 // Body: { supplierName, invoiceNumber?, invoiceDate, items: [{ inventoryItem, articleId, quantity, unitCost }], notes? }
@@ -57,6 +58,21 @@ async function createPurchaseRecord(req, res, next) {
           article.mspPrice = calculateMsp(unitCost);
         }
         await product.save({ session });
+        await logStockMovement(
+          {
+            inventoryItem: product._id,
+            articleId: article._id,
+            sku: article.sku,
+            productName: product.name,
+            type: "purchase_in",
+            quantityChange: quantity,
+            previousStock: article.stock - quantity,
+            newStock: article.stock,
+            referenceType: "PurchaseRecord",
+            performedBy: req.user._id,
+          },
+          session,
+        );
 
         const lineName = `${product.name} — ${[article.color, article.lensTint, article.size].filter(Boolean).join(" / ") || "Standard"}`;
         purchaseItems.push({

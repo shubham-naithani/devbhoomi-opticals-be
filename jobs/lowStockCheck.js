@@ -12,7 +12,8 @@ async function findLowStockArticles() {
 
   products.forEach((product) => {
     (product.articles || []).forEach((article) => {
-      if (article.isActive && article.stock <= LOW_STOCK_THRESHOLD) {
+      const effectiveThreshold = article.lowStockThreshold ?? LOW_STOCK_THRESHOLD;
+      if (article.isActive && article.stock <= effectiveThreshold) {
         lowStock.push({ name: `${product.name} (${article.sku})`, stock: article.stock });
       }
     });
