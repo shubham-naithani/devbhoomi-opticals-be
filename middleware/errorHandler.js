@@ -1,3 +1,5 @@
+const { logError } = require("../utils/errorLogger");
+
 // Converts Mongoose/validation/duplicate-key errors into clean JSON responses
 function errorHandler(err, req, res, next) {
   let statusCode = err.statusCode || 500;
@@ -25,6 +27,23 @@ function errorHandler(err, req, res, next) {
     statusCode = 400;
     const field = Object.keys(err.keyValue || {})[0];
     message = `${field} already exists`;
+  }
+
+  // Only log genuinely unexpected failures — anything still a 5xx after
+  // all the remapping above. Deliberate 4xx errors (validation, business
+  // rules your controllers throw on purpose) are normal operation, not
+  // incidents — they shouldn't clutter the error log or trigger an alert.
+  if (statusCode >= 500) {
+    logError({
+      source: "backend",
+      severity: "critical",
+      message: err.message || message,
+      stack: err.stack,
+      route: req.originalUrl,
+      method: req.method,
+      statusCode,
+      user: req.user,
+    }).catch(() => {});
   }
 
   res.status(statusCode).json({ message });

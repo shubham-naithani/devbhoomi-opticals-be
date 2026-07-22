@@ -144,4 +144,26 @@ async function notifyLowStock(items) {
   ]);
 }
 
-module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived, notifyLowStock };
+let lastCriticalAlertAt = 0;
+const CRITICAL_ALERT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
+
+async function notifyCriticalError(errorDoc) {
+  const now = Date.now();
+  if (now - lastCriticalAlertAt < CRITICAL_ALERT_COOLDOWN_MS) {
+    console.log("[WhatsApp] Critical error alert suppressed — cooldown active (avoids spam during an outage)");
+    return;
+  }
+
+  const templateName = process.env.WHATSAPP_TEMPLATE_CRITICAL_ERROR || "critical_error_alert";
+  const adminPhone = process.env.ADMIN_NOTIFY_PHONE;
+  if (!adminPhone) {
+    console.log("[WhatsApp] Skipped critical error alert — ADMIN_NOTIFY_PHONE not set");
+    return;
+  }
+
+  lastCriticalAlertAt = now;
+  const shortMessage = (errorDoc.message || "Unknown error").slice(0, 100);
+  await sendTemplateMessage(adminPhone, templateName, "en", [shortMessage, errorDoc.route || "unknown"]);
+}
+
+module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived, notifyLowStock, notifyCriticalError };
