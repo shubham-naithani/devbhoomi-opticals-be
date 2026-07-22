@@ -21,11 +21,12 @@ Set these in Azure App Service (Configuration → Application Settings), not in 
 | `WHATSAPP_ENABLED` | `true` to send real WhatsApp messages; anything else = stub/log-only mode |
 | `WHATSAPP_TOKEN` | Meta permanent access token (see below) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta WhatsApp phone number ID |
-| `ADMIN_NOTIFY_PHONE` | Phone number that receives low-stock alerts |
+| `ADMIN_NOTIFY_PHONE` | Phone number that receives low-stock alerts **and critical error alerts** |
 | `WHATSAPP_TEMPLATE_ORDER_CREATED` | Approved template name for order confirmations |
 | `WHATSAPP_TEMPLATE_STATUS_CHANGED` | Approved template name for status updates |
 | `WHATSAPP_TEMPLATE_PAYMENT_RECEIVED` | Approved template name for payment confirmations |
 | `WHATSAPP_TEMPLATE_LOW_STOCK` | Approved template name for low-stock alerts |
+| `WHATSAPP_TEMPLATE_CRITICAL_ERROR` | Approved template name for critical system error alerts |
 | `RAZORPAY_KEY_ID` | Razorpay API key ID (test or live) |
 | `RAZORPAY_KEY_SECRET` | Razorpay API key secret |
 | `RAZORPAY_WEBHOOK_SECRET` | Separate secret set when configuring the webhook in Razorpay's dashboard |
@@ -73,9 +74,36 @@ Set these in Azure App Service (Configuration → Application Settings), not in 
    - Order status changed — e.g. `"Update on your order {{1}}: your order is now \"{{2}}\"."`
    - Payment received — e.g. `"Payment of ₹{{2}} received for order {{1}}."`
    - Low stock alert — e.g. `"⚠️ Low stock alert: {{1}} item(s) running low — {{2}}."`
+   - Critical error alert — e.g. `"🚨 System error: {{1}} (at {{2}}). Check the Error Log in admin for details."`
    - Approval typically takes 24–48 hours. Once approved, put the exact approved template names into the `WHATSAPP_TEMPLATE_*` env vars.
 6. Set `WHATSAPP_ENABLED=true` only once templates are approved and the permanent token is in place. Until then, leave it unset or `false` — the system safely logs to console instead of attempting real sends (no risk of a misconfigured send breaking anything).
 7. **Business verification** (optional but recommended) raises your daily messaging limits — submit business documents via Meta Business Manager when ready for higher volume.
+
+---
+
+## Error Monitoring
+
+The system automatically catches and logs unexpected errors — no third-party service (like Sentry) is used; everything is stored in your own MongoDB database and viewable from the admin **Error Log** page.
+
+### How it works
+
+- **Backend:** every controller already funnels unexpected failures through Express's global error handler (`middleware/errorHandler.js`). Any error that results in a 5xx response is automatically logged — no per-route setup needed, this covers the whole app.
+- **Frontend:** Angular's global error handler (`core/services/global-error-handler.ts`) catches any uncaught exception in the browser and reports it to the backend, logged the same way.
+- Both are stored in the `ErrorLog` collection and viewable at **Admin → Error Log**, with search and source (backend/frontend) filtering.
+
+### What does NOT get logged
+
+Expected, deliberate errors — form validation failures, business-rule rejections (e.g. "coupon already used," "not enough stock") — are **not** logged here. Only genuine 5xx failures (unexpected crashes) show up, keeping the log meaningful instead of full of routine rejections.
+
+### WhatsApp Alerts on Critical Errors
+
+Whenever a critical (5xx) error is logged, the system also attempts a WhatsApp alert to `ADMIN_NOTIFY_PHONE` using the `WHATSAPP_TEMPLATE_CRITICAL_ERROR` template (submit this template to Meta the same way as the others above).
+
+**Cooldown:** to avoid being flooded with messages during an outage (e.g. if the database goes down and every request fails), alerts are limited to **one per 15 minutes**. Every error still gets logged to the Error Log regardless of the cooldown — only the WhatsApp *notification* is throttled, not the record-keeping.
+
+### Testing This Yourself
+
+If you ever need to verify this is still working after a deployment change: temporarily add `throw new Error("TEST: ...")` at the top of any controller function, reload the corresponding page once, confirm it appears in Error Log, then **remove the test line immediately** — never leave a forced error in deployed code.
 
 ---
 
