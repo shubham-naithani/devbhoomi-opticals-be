@@ -25,7 +25,12 @@ const errorRoutes = require('./routes/errorLogRoutes')
 const app = express();
 
 app.use(cors({
-   origin: 'https://polite-hill-0a1070300.7.azurestaticapps.net'
+  origin: [
+    'https://polite-hill-0a1070300.7.azurestaticapps.net', // admin
+    'https://witty-sea-060c49a00.7.azurestaticapps.net',   // customer
+    'http://localhost:4200', // local dev
+  ],
+  credentials: true,
 }));
 
 app.use(express.json());
