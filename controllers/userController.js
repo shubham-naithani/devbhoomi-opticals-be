@@ -139,4 +139,148 @@ async function deleteUser(req, res, next) {
   }
 }
 
-module.exports = { getUsers, getUserById, createUser, updateUser, deleteUser };
+// GET /api/users/me
+async function getMe(req, res, next) {
+  try {
+    res.json({ user: req.user });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/users/me — self-service profile edit (name/phone only —
+// email changes are a bigger decision, not exposed here yet)
+async function updateMe(req, res, next) {
+  try {
+    const { name, phone } = req.body;
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (name !== undefined) user.name = name;
+    if (phone !== undefined) user.phone = phone;
+
+    await user.save();
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/users/me/password
+async function changeMyPassword(req, res, next) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current and new password are required" });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters" });
+    }
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const matches = await user.comparePassword(currentPassword);
+    if (!matches) return res.status(400).json({ message: "Current password is incorrect" });
+
+    user.password = newPassword; // re-hashed by the pre-save hook
+    await user.save();
+
+    res.json({ message: "Password updated" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/users/me/addresses
+async function listMyAddresses(req, res, next) {
+  try {
+    const user = await User.findById(req.user._id);
+    res.json({ addresses: user.addresses || [] });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/users/me/addresses
+async function addMyAddress(req, res, next) {
+  try {
+    const { label, line1, line2, city, state, pincode, phone, isDefault } = req.body;
+    if (!line1 || !city || !pincode) {
+      return res.status(400).json({ message: "line1, city and pincode are required" });
+    }
+
+    const user = await User.findById(req.user._id);
+    const makeDefault = isDefault || user.addresses.length === 0;
+    if (makeDefault) user.addresses.forEach((a) => { a.isDefault = false; });
+
+    user.addresses.push({ label, line1, line2, city, state, pincode, phone, isDefault: makeDefault });
+    await user.save();
+
+    res.status(201).json({ addresses: user.addresses });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/users/me/addresses/:addressId
+async function updateMyAddress(req, res, next) {
+  try {
+    const user = await User.findById(req.user._id);
+    const addr = user.addresses.id(req.params.addressId);
+    if (!addr) return res.status(404).json({ message: "Address not found" });
+
+    const { label, line1, line2, city, state, pincode, phone, isDefault } = req.body;
+    if (label !== undefined) addr.label = label;
+    if (line1 !== undefined) addr.line1 = line1;
+    if (line2 !== undefined) addr.line2 = line2;
+    if (city !== undefined) addr.city = city;
+    if (state !== undefined) addr.state = state;
+    if (pincode !== undefined) addr.pincode = pincode;
+    if (phone !== undefined) addr.phone = phone;
+
+    if (isDefault) {
+      user.addresses.forEach((a) => { a.isDefault = false; });
+      addr.isDefault = true;
+    }
+
+    await user.save();
+    res.json({ addresses: user.addresses });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/users/me/addresses/:addressId
+async function deleteMyAddress(req, res, next) {
+  try {
+    const user = await User.findById(req.user._id);
+    const addr = user.addresses.id(req.params.addressId);
+    if (!addr) return res.status(404).json({ message: "Address not found" });
+
+    const wasDefault = addr.isDefault;
+    addr.deleteOne();
+    if (wasDefault && user.addresses.length > 0) user.addresses[0].isDefault = true;
+
+    await user.save();
+    res.json({ addresses: user.addresses });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  getUsers, 
+  getUserById, 
+  createUser, 
+  updateUser, 
+  deleteUser,
+  getMe, 
+  updateMe, 
+  changeMyPassword,
+  listMyAddresses, 
+  addMyAddress, 
+  updateMyAddress, 
+  deleteMyAddress,
+};
+
