@@ -17,9 +17,8 @@ const Coupon = require("../models/Coupon");
 // once reached). Enforced here so an invalid transition is rejected even if
 // the frontend dropdown is bypassed and the API is hit directly.
 const STATUS_TRANSITIONS = {
-  pending: ["confirmed", "cancelled"],
   confirmed: ["in_progress", "cancelled"],
-  in_progress: ["ready_for_pickup", "cancelled"],
+  in_progress: ["ready_for_pickup"],
   ready_for_pickup: ["delivered", "cancelled"],
   delivered: [],
   cancelled: [],

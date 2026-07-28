@@ -77,14 +77,13 @@ const orderSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: [
-        "pending",
         "confirmed",
         "in_progress",
         "ready_for_pickup",
         "delivered",
         "cancelled",
       ],
-      default: "pending",
+      default: "confirmed",
     },
     // Where the order originated — lets reporting split walk-in vs online sales.
     source: {
