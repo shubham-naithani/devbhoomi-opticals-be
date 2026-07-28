@@ -4,6 +4,7 @@ const RepairTicket = require("../models/RepairTicket");
 const User = require("../models/User");
 const { generateRepairId } = require("../utils/humanId");
 const { logAudit } = require("../utils/auditLogger");
+const { notifyRepairCreated, notifyRepairStatusChanged } = require("../services/whatsappService");
 
 const STATUS_TRANSITIONS = {
   received: ["in_progress", "cancelled"],
@@ -136,6 +137,7 @@ async function createRepairTicket(req, res, next) {
         `Repair ticket ${repairId} created for ${customer.name}: ${itemName}` +
         (isUnverified ? " (unverified — no matching purchase found)" : isUnderWarranty ? " — under warranty" : " — fee required"),
     });
+    notifyRepairCreated(ticket, customer.phone).catch(() => {});
 
     res.status(201).json({ ticket });
   } catch (err) {
@@ -217,6 +219,9 @@ async function updateRepairStatus(req, res, next) {
       user: req.user,
       summary: `Repair ticket ${ticket.repairId} status -> ${status}`,
     });
+
+    const customerPhone = ticket.customer && ticket.customer.phone;
+    notifyRepairStatusChanged(ticket, customerPhone).catch(() => {});
 
     res.json({ ticket });
   } catch (err) {

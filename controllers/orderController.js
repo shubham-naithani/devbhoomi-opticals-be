@@ -11,6 +11,7 @@ const { SHIPPING_FEE } = require("../utils/pricing");
 const { logStockMovement } = require("../utils/stockMovementLogger");
 const { validateAndApplyCoupon } = require("../utils/couponEngine");
 const Coupon = require("../models/Coupon");
+const RepairTicket = require("../models/RepairTicket");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
@@ -388,7 +389,14 @@ async function getOrderById(req, res, next) {
       .populate("prescriptionUsed");
 
     if (!order) return res.status(404).json({ message: "Order not found" });
-    res.json({ order });
+
+    // Any repair tickets that trace back to this order — informational only.
+    const relatedRepairs = await RepairTicket.find(
+      { linkedOrderId: order._id, isDeleted: { $ne: true } },
+      "repairId itemName status createdAt"
+    ).sort({ createdAt: -1 });
+
+    res.json({ order, relatedRepairs });
   } catch (err) {
     next(err);
   }
