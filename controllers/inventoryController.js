@@ -195,11 +195,11 @@ async function createInventory(req, res, next) {
     const barcode = await generateBarcode();
     const costPrice = Number(article.costPrice);
 
-    // MRP is always derived — any `price` the client sent is ignored.
-    // MSP: if the client explicitly supplied mspPrice, that's a manual
+    // MSP is always derived — never client-settable, this is the hard floor.
+    // MRP: if the client explicitly supplied a price, that's a manual
     // override recorded as such; otherwise it's auto-derived from cost.
-    const isMspManual = article.mspPrice !== undefined && article.mspPrice !== null;
-    const mspPrice = isMspManual ? Number(article.mspPrice) : calculateMsp(costPrice);
+    const isMrpManual = article.price !== undefined && article.price !== null;
+    const mrpPrice = isMrpManual ? Number(article.price) : calculateMrp(costPrice);
 
     const item = await Inventory.create({
       name,
@@ -211,9 +211,9 @@ async function createInventory(req, res, next) {
           barcode,
           barcodeGeneratedAt: new Date(),
           costPrice,
-          price: calculateMrp(costPrice),
-          mspPrice,
-          isMspManual,
+          price: mrpPrice,
+          mspPrice: calculateMsp(costPrice), 
+          isMrpManual,
         },
       ],
     });
@@ -300,8 +300,9 @@ async function addArticle(req, res, next) {
     const sku = await generateInventorySku(product.category);
     const barcode = await generateBarcode();
     const costPrice = Number(req.body.costPrice);
-    const isMspManual = req.body.mspPrice !== undefined && req.body.mspPrice !== null;
-    const mspPrice = isMspManual ? Number(req.body.mspPrice) : calculateMsp(costPrice);
+    
+    const isMrpManual = req.body.price !== undefined && req.body.price !== null;
+    const price = isMrpManual ? Number(req.body.price) : calculateMrp(costPrice);
 
     product.articles.push({
       ...req.body,
@@ -309,9 +310,9 @@ async function addArticle(req, res, next) {
       barcode,
       barcodeGeneratedAt: new Date(),
       costPrice,
-      price: calculateMrp(costPrice),
-      mspPrice,
-      isMspManual,
+      price,
+      mspPrice: calculateMsp(costPrice),
+      isMrpManual,
     });
     await product.save();
 
@@ -332,7 +333,10 @@ async function addArticle(req, res, next) {
 // PUT /api/inventory/:id/articles/:articleId (admin only)
 async function updateArticle(req, res, next) {
   try {
-    const { sku, barcode, barcodeGeneratedAt, price, stockAdjustmentReason, ...updates } = req.body;
+    // sku, barcode, barcodeGeneratedAt: immutable once assigned.
+    // mspPrice: never client-settable — MSP is always server-derived, the hard floor.
+    // stockAdjustmentReason: metadata for the stock-movement log, not an article field.
+    const { sku, barcode, barcodeGeneratedAt, mspPrice, stockAdjustmentReason, ...updates } = req.body;
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -343,9 +347,8 @@ async function updateArticle(req, res, next) {
     const previousImages = [...(article.images || [])];
     const previousStock = article.stock;
 
-    // If stock is actually being changed by hand (not via order/purchase
-    // flows, which never hit this endpoint), a reason is required — this
-    // is the one stock-changing path with no other automatic paper trail.
+    // If stock is actually being changed by hand, a reason is required —
+    // this is the one stock-changing path with no other automatic paper trail.
     const stockChanged = updates.stock !== undefined && Number(updates.stock) !== previousStock;
     if (stockChanged && (!stockAdjustmentReason || !stockAdjustmentReason.trim())) {
       return res.status(400).json({ message: "A reason is required when manually changing stock" });
@@ -353,28 +356,28 @@ async function updateArticle(req, res, next) {
 
     const newCostPrice = updates.costPrice !== undefined ? Number(updates.costPrice) : article.costPrice;
 
-    let isMspManual = article.isMspManual;
-    let mspPrice = article.mspPrice;
+    let isMrpManual = article.isMrpManual;
+    let mrpPrice = article.price;
 
-    if (updates.mspPrice !== undefined && updates.mspPrice !== null) {
-      mspPrice = Number(updates.mspPrice);
-      isMspManual = true;
-    } else if (updates.isMspManual === false) {
-      isMspManual = false;
+    if (updates.price !== undefined && updates.price !== null) {
+      mrpPrice = Number(updates.price);
+      isMrpManual = true;
+    } else if (updates.isMrpManual === false) {
+      isMrpManual = false;
     }
 
     Object.assign(article, updates);
 
     if (newCostPrice !== undefined && newCostPrice !== null) {
       article.costPrice = newCostPrice;
-      article.price = calculateMrp(newCostPrice);
-      if (!isMspManual) {
-        mspPrice = calculateMsp(newCostPrice);
+      article.mspPrice = calculateMsp(newCostPrice); // always recalculated, no exceptions
+      if (!isMrpManual) {
+        mrpPrice = calculateMrp(newCostPrice);
       }
     }
 
-    article.mspPrice = mspPrice;
-    article.isMspManual = isMspManual;
+    article.price = mrpPrice;
+    article.isMrpManual = isMrpManual;
 
     await product.save();
 

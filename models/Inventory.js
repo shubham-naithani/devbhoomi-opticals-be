@@ -38,7 +38,7 @@ const articleSchema = new mongoose.Schema({
     type: Number,
     min: 0,
   },
-  isMspManual: {
+  isMrpManual: {
     type: Boolean,
     default: false,
   },
