@@ -20,7 +20,8 @@ const transactionRoutes = require("./routes/transactionRoutes");
 const purchaseRoutes = require("./routes/purchaseRoutes");
 const stockMovementRoutes = require("./routes/stockMovementRoutes");
 const couponRoutes = require("./routes/couponRoutes");
-const errorRoutes = require('./routes/errorLogRoutes')
+const errorRoutes = require('./routes/errorLogRoutes');
+const repairRoutes = require('./routes/repairRoutes');
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use("/api/purchases", purchaseRoutes);
 app.use("/api/stock-movements", stockMovementRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/error-logs", errorRoutes);
+app.use("/api/repairs", repairRoutes);
 app.use(notFound);
 app.use(errorHandler);
 

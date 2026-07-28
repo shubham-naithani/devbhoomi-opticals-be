@@ -2,11 +2,7 @@ const mongoose = require("mongoose");
 
 const orderItemSchema = new mongoose.Schema(
   {
-    inventoryItem: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Inventory",
-      required: true,
-    },
+    inventoryItem: { type: mongoose.Schema.Types.ObjectId, ref: "Inventory", required: true },
     articleId: { type: mongoose.Schema.Types.ObjectId, required: true },
     name: { type: String, required: true },
     price: { type: Number, required: true },
@@ -14,6 +10,7 @@ const orderItemSchema = new mongoose.Schema(
     mspPrice: { type: Number },
     itemDiscountPercent: { type: Number, default: 0, min: 0, max: 100 },
     itemDiscountAmount: { type: Number, default: 0, min: 0 },
+    warrantyMonths: { type: Number, default: 0, min: 0 },
     quantity: { type: Number, required: true, min: 1 },
   },
   { _id: false },

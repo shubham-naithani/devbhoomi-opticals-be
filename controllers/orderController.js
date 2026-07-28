@@ -91,6 +91,7 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       mspPrice: msp,
       itemDiscountPercent: discountPercent,
       itemDiscountAmount,
+      warrantyMonths: Number(line.warrantyMonths) || 0,
       quantity,
     });
     totalAmount += discountedUnitPrice * quantity;

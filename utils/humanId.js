@@ -57,4 +57,11 @@ async function generatePurchaseId() {
   return `PUR-${year}-${pad(seq, 6)}`;
 }
 
-module.exports = { getNextSequence, generateOrderId, generateInventorySku, generateBarcode, generatePurchaseId };
+// e.g. REP-2026-000012 — resets numbering per calendar year, same pattern as orderId
+async function generateRepairId() {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`repair-${year}`);
+  return `REP-${year}-${pad(seq, 6)}`;
+}
+
+module.exports = { getNextSequence, generateOrderId, generateInventorySku, generateBarcode, generatePurchaseId, generateRepairId };
