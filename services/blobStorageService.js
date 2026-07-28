@@ -91,5 +91,21 @@ async function deleteInventoryImages(urls) {
   );
 }
 
-module.exports = { uploadInventoryImages, deleteInventoryImages };
+// Uploads a single invoice PDF buffer and returns its public URL.
+// Stored under an "invoices/" prefix in the same container — same public-
+// read access as product images, so the URL is directly usable in a
+// WhatsApp message or an <a href> in the admin panel.
+async function uploadInvoicePdf(buffer, orderId) {
+  const containerClient = await getContainerClient();
+  const blobName = `invoices/${orderId}-${crypto.randomUUID()}.pdf`;
+  const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+  await blockBlobClient.uploadData(buffer, {
+    blobHTTPHeaders: { blobContentType: "application/pdf" },
+  });
+
+  return blockBlobClient.url;
+}
+
+module.exports = { uploadInventoryImages, deleteInventoryImages, uploadInvoicePdf };
  

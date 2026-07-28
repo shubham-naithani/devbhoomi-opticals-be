@@ -193,6 +193,11 @@ async function notifyRepairStatusChanged(ticket, customerPhone) {
   ]);
 }
 
+async function notifyInvoiceGenerated(order, invoiceUrl, customerPhone) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_INVOICE_GENERATED || "invoice_generated";
+  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, invoiceUrl]);
+}
+
 module.exports = {
   notifyOrderCreated,
   notifyOrderStatusChanged,
@@ -201,4 +206,5 @@ module.exports = {
   notifyCriticalError,
   notifyRepairCreated,
   notifyRepairStatusChanged,
+  notifyInvoiceGenerated
 };

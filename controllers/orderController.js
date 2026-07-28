@@ -12,6 +12,9 @@ const { logStockMovement } = require("../utils/stockMovementLogger");
 const { validateAndApplyCoupon } = require("../utils/couponEngine");
 const Coupon = require("../models/Coupon");
 const RepairTicket = require("../models/RepairTicket");
+const { generateInvoicePdf } = require("../utils/invoiceGenerator");
+const { uploadInvoicePdf } = require("../services/blobStorageService");
+const { notifyInvoiceGenerated } = require("../services/whatsappService");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
@@ -90,6 +93,7 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       price: mrp,
       costPrice: article.costPrice ?? undefined,
       mspPrice: msp,
+      barcode: article.barcode,
       itemDiscountPercent: discountPercent,
       itemDiscountAmount,
       warrantyMonths: Number(line.warrantyMonths) || 0,
@@ -876,6 +880,39 @@ async function bulkDeleteOrders(req, res, next) {
   }
 }
 
+// POST /api/orders/:id/invoice (admin/staff) — manually generate (or
+// regenerate) this order's invoice PDF, upload it, save the reference on
+// the order, and send it to the customer via WhatsApp.
+async function generateInvoice(req, res, next) {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+      .populate("customer", "name phone");
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    const pdfBuffer = await generateInvoicePdf(order);
+    const url = await uploadInvoicePdf(pdfBuffer, order.orderId);
+
+    order.invoiceUrl = url;
+    order.invoiceGeneratedAt = new Date();
+    await order.save();
+
+    await logAudit({
+      entityType: "Order",
+      entityId: order._id,
+      action: "update",
+      user: req.user,
+      summary: `Invoice generated for order ${order.orderId}`,
+    });
+
+    const customerPhone = order.customer && order.customer.phone;
+    notifyInvoiceGenerated(order, url, customerPhone).catch(() => {});
+
+    res.json({ order, invoiceUrl: url });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   createOrder,
   createWalkInOrder,
@@ -890,4 +927,5 @@ module.exports = {
   deleteOrder,
   bulkUpdateOrderStatus,
   bulkDeleteOrders, 
+  generateInvoice
 };

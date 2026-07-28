@@ -2,12 +2,20 @@ const mongoose = require("mongoose");
 
 const orderItemSchema = new mongoose.Schema(
   {
-    inventoryItem: { type: mongoose.Schema.Types.ObjectId, ref: "Inventory", required: true },
-    articleId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    inventoryItem: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Inventory",
+      required: true,
+    },
+    articleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
     name: { type: String, required: true },
     price: { type: Number, required: true },
     costPrice: { type: Number },
     mspPrice: { type: Number },
+    barcode: { type: String }, // snapshot of the article's barcode at sale time, for invoice printing
     itemDiscountPercent: { type: Number, default: 0, min: 0, max: 100 },
     itemDiscountAmount: { type: Number, default: 0, min: 0 },
     warrantyMonths: { type: Number, default: 0, min: 0 },
