@@ -54,6 +54,15 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       );
     }
 
+    // Per-item manual % discount — off MRP, floor-capped at MSP. Same floor
+    // rule coupons already respect, just scoped to this one line.
+    const rawPercent = Number(line.discountPercent) || 0;
+    const discountPercent = Math.min(Math.max(rawPercent, 0), 100);
+    const mrp = article.price;
+    const msp = article.mspPrice ?? 0;
+    const discountedUnitPrice = Math.max(mrp * (1 - discountPercent / 100), msp);
+    const itemDiscountAmount = Math.round((mrp - discountedUnitPrice) * quantity * 100) / 100;
+
     const previousStock = article.stock;
     article.stock -= quantity;
     await product.save({ session });
@@ -77,12 +86,14 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       inventoryItem: product._id,
       articleId: article._id,
       name: `${product.name} — ${describeArticle(article)}`,
-      price: article.price,
+      price: mrp,
       costPrice: article.costPrice ?? undefined,
-      mspPrice: article.mspPrice ?? undefined,
+      mspPrice: msp,
+      itemDiscountPercent: discountPercent,
+      itemDiscountAmount,
       quantity,
     });
-    totalAmount += article.price * quantity;
+    totalAmount += discountedUnitPrice * quantity;
   }
 
   return { orderItems, totalAmount };
@@ -214,6 +225,15 @@ async function createWalkInOrder(req, res, next) {
     const customer = await User.findById(customerId);
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Coupon and per-item discounts are mutually exclusive — enforce this
+    // server-side too, not just via disabled frontend inputs.
+    const hasItemDiscounts = items.some((l) => Number(l.discountPercent) > 0);
+    if (hasItemDiscounts && couponCode) {
+      return res.status(400).json({
+        message: "Cannot use a coupon together with per-item discounts on the same order — choose one.",
+      });
     }
 
     let createdOrder;
