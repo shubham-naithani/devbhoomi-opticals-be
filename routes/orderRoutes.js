@@ -13,6 +13,7 @@ const {
   settleRefund,
   bulkUpdateOrderStatus,
   bulkDeleteOrders,
+  generateInvoice,
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
 
@@ -40,5 +41,7 @@ router.put("/:id/payment", authorize("admin", "staff"), recordPayment);
 router.delete("/:id", authorize("admin"), deleteOrder); // soft delete — admin only
 router.put("/:id/refund", authorize("admin", "staff"), refundOrder);
 router.put("/:id/settle-refund", authorize("admin", "staff"), settleRefund);
+
+router.post("/:id/invoice", authorize("admin", "staff"), generateInvoice);
 
 module.exports = router;

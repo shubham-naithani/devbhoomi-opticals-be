@@ -11,10 +11,14 @@ const orderItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
-    name: { type: String, required: true }, // snapshot, e.g. "Ray-Ban Aviator — Black / Green lens"
-    price: { type: Number, required: true }, // snapshot of the article's unit price at time of order
+    name: { type: String, required: true },
+    price: { type: Number, required: true },
     costPrice: { type: Number },
-    mspPrice: { type: Number }, // NEW — cost snapshot at time of sale, for accurate historical P&L
+    mspPrice: { type: Number },
+    barcode: { type: String }, // snapshot of the article's barcode at sale time, for invoice printing
+    itemDiscountPercent: { type: Number, default: 0, min: 0, max: 100 },
+    itemDiscountAmount: { type: Number, default: 0, min: 0 },
+    warrantyMonths: { type: Number, default: 0, min: 0 },
     quantity: { type: Number, required: true, min: 1 },
   },
   { _id: false },
@@ -77,14 +81,13 @@ const orderSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: [
-        "pending",
         "confirmed",
         "in_progress",
         "ready_for_pickup",
         "delivered",
         "cancelled",
       ],
-      default: "pending",
+      default: "confirmed",
     },
     // Where the order originated — lets reporting split walk-in vs online sales.
     source: {

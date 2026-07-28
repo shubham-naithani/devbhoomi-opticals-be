@@ -11,15 +11,18 @@ const { SHIPPING_FEE } = require("../utils/pricing");
 const { logStockMovement } = require("../utils/stockMovementLogger");
 const { validateAndApplyCoupon } = require("../utils/couponEngine");
 const Coupon = require("../models/Coupon");
+const RepairTicket = require("../models/RepairTicket");
+const { generateInvoicePdf } = require("../utils/invoiceGenerator");
+const { uploadInvoicePdf } = require("../services/blobStorageService");
+const { notifyInvoiceGenerated } = require("../services/whatsappService");
 
 // Explicit state machine — Cancelled is reachable from every non-terminal
 // status; Delivered and Cancelled are both terminal (no further transitions
 // once reached). Enforced here so an invalid transition is rejected even if
 // the frontend dropdown is bypassed and the API is hit directly.
 const STATUS_TRANSITIONS = {
-  pending: ["confirmed", "cancelled"],
   confirmed: ["in_progress", "cancelled"],
-  in_progress: ["ready_for_pickup", "cancelled"],
+  in_progress: ["ready_for_pickup"],
   ready_for_pickup: ["delivered", "cancelled"],
   delivered: [],
   cancelled: [],
@@ -55,6 +58,15 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       );
     }
 
+    // Per-item manual % discount — off MRP, floor-capped at MSP. Same floor
+    // rule coupons already respect, just scoped to this one line.
+    const rawPercent = Number(line.discountPercent) || 0;
+    const discountPercent = Math.min(Math.max(rawPercent, 0), 100);
+    const mrp = article.price;
+    const msp = article.mspPrice ?? 0;
+    const discountedUnitPrice = Math.max(mrp * (1 - discountPercent / 100), msp);
+    const itemDiscountAmount = Math.round((mrp - discountedUnitPrice) * quantity * 100) / 100;
+
     const previousStock = article.stock;
     article.stock -= quantity;
     await product.save({ session });
@@ -78,12 +90,16 @@ async function buildOrderItemsAndDeductStock(items, session, performedBy) {
       inventoryItem: product._id,
       articleId: article._id,
       name: `${product.name} — ${describeArticle(article)}`,
-      price: article.price,
+      price: mrp,
       costPrice: article.costPrice ?? undefined,
-      mspPrice: article.mspPrice ?? undefined,
+      mspPrice: msp,
+      barcode: article.barcode,
+      itemDiscountPercent: discountPercent,
+      itemDiscountAmount,
+      warrantyMonths: Number(line.warrantyMonths) || 0,
       quantity,
     });
-    totalAmount += article.price * quantity;
+    totalAmount += discountedUnitPrice * quantity;
   }
 
   return { orderItems, totalAmount };
@@ -215,6 +231,15 @@ async function createWalkInOrder(req, res, next) {
     const customer = await User.findById(customerId);
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Coupon and per-item discounts are mutually exclusive — enforce this
+    // server-side too, not just via disabled frontend inputs.
+    const hasItemDiscounts = items.some((l) => Number(l.discountPercent) > 0);
+    if (hasItemDiscounts && couponCode) {
+      return res.status(400).json({
+        message: "Cannot use a coupon together with per-item discounts on the same order — choose one.",
+      });
     }
 
     let createdOrder;
@@ -368,7 +393,14 @@ async function getOrderById(req, res, next) {
       .populate("prescriptionUsed");
 
     if (!order) return res.status(404).json({ message: "Order not found" });
-    res.json({ order });
+
+    // Any repair tickets that trace back to this order — informational only.
+    const relatedRepairs = await RepairTicket.find(
+      { linkedOrderId: order._id, isDeleted: { $ne: true } },
+      "repairId itemName status createdAt"
+    ).sort({ createdAt: -1 });
+
+    res.json({ order, relatedRepairs });
   } catch (err) {
     next(err);
   }
@@ -848,6 +880,39 @@ async function bulkDeleteOrders(req, res, next) {
   }
 }
 
+// POST /api/orders/:id/invoice (admin/staff) — manually generate (or
+// regenerate) this order's invoice PDF, upload it, save the reference on
+// the order, and send it to the customer via WhatsApp.
+async function generateInvoice(req, res, next) {
+  try {
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: { $ne: true } })
+      .populate("customer", "name phone");
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    const pdfBuffer = await generateInvoicePdf(order);
+    const url = await uploadInvoicePdf(pdfBuffer, order.orderId);
+
+    order.invoiceUrl = url;
+    order.invoiceGeneratedAt = new Date();
+    await order.save();
+
+    await logAudit({
+      entityType: "Order",
+      entityId: order._id,
+      action: "update",
+      user: req.user,
+      summary: `Invoice generated for order ${order.orderId}`,
+    });
+
+    const customerPhone = order.customer && order.customer.phone;
+    notifyInvoiceGenerated(order, url, customerPhone).catch(() => {});
+
+    res.json({ order, invoiceUrl: url });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   createOrder,
   createWalkInOrder,
@@ -862,4 +927,5 @@ module.exports = {
   deleteOrder,
   bulkUpdateOrderStatus,
   bulkDeleteOrders, 
+  generateInvoice
 };

@@ -1,9 +1,10 @@
 const User = require("../models/User");
 const { logAudit } = require("../utils/auditLogger");
-
+const Order = require("../models/Order");
 const VALID_ROLES = ["admin", "staff", "customer"];
 
 // GET /api/users  (admin only) — list all users, with basic search + pagination
+
 async function getUsers(req, res, next) {
   try {
     const { search = "", role, page = 1, limit = 20 } = req.query;
@@ -25,7 +26,23 @@ async function getUsers(req, res, next) {
       User.countDocuments(filter),
     ]);
 
-    res.json({ users, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+    const userIds = users.map((u) => u._id);
+    const orderCounts = await Order.aggregate([
+      { $match: { customer: { $in: userIds }, isDeleted: { $ne: true } } },
+      { $group: { _id: "$customer", count: { $sum: 1 } } },
+    ]);
+
+    const countMap = {};
+    orderCounts.forEach((oc) => {
+      countMap[oc._id.toString()] = oc.count;
+    });
+
+    const usersWithCounts = users.map((u) => ({
+      ...u.toObject(),
+      orderCount: countMap[u._id.toString()] || 0,
+    }));
+
+    res.json({ users: usersWithCounts, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (err) {
     next(err);
   }

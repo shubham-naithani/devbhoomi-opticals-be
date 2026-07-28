@@ -25,6 +25,14 @@ const STATUS_LABELS = {
   cancelled: "Cancelled",
 };
 
+const REPAIR_STATUS_LABELS = {
+  received: "Received",
+  in_progress: "In Progress",
+  ready_for_pickup: "Ready for Pickup",
+  collected: "Collected",
+  cancelled: "Cancelled",
+};
+
 const GRAPH_API_VERSION = "v20.0";
 
 function isConfigured() {
@@ -166,4 +174,37 @@ async function notifyCriticalError(errorDoc) {
   await sendTemplateMessage(adminPhone, templateName, "en", [shortMessage, errorDoc.route || "unknown"]);
 }
 
-module.exports = { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived, notifyLowStock, notifyCriticalError };
+function formatRepairStatusLabel(status) {
+  return REPAIR_STATUS_LABELS[status] || status;
+}
+
+async function notifyRepairCreated(ticket, customerPhone) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_REPAIR_CREATED || "repair_created";
+  const feeNote = ticket.feeAmount > 0 ? `Fee: Rs.${ticket.feeAmount}` : "Free (under warranty)";
+  await sendTemplateMessage(customerPhone, templateName, "en", [ticket.repairId, ticket.itemName, feeNote]);
+}
+
+async function notifyRepairStatusChanged(ticket, customerPhone) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_REPAIR_STATUS_CHANGED || "repair_status_changed";
+  await sendTemplateMessage(customerPhone, templateName, "en", [
+    ticket.repairId,
+    ticket.itemName,
+    formatRepairStatusLabel(ticket.status),
+  ]);
+}
+
+async function notifyInvoiceGenerated(order, invoiceUrl, customerPhone) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_INVOICE_GENERATED || "invoice_generated";
+  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, invoiceUrl]);
+}
+
+module.exports = {
+  notifyOrderCreated,
+  notifyOrderStatusChanged,
+  notifyPaymentReceived,
+  notifyLowStock,
+  notifyCriticalError,
+  notifyRepairCreated,
+  notifyRepairStatusChanged,
+  notifyInvoiceGenerated
+};
