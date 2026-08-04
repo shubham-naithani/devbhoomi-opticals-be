@@ -14,7 +14,9 @@ This guide covers everything a **staff** account can do. If you're an admin, als
 
 ## Creating a Walk-In Order
 
-This is the main thing you'll do all day. Click **"New walk-in order"** in the sidebar. The process has 4 steps, shown as tabs at the top — you can click a completed step to go back, but you can't skip ahead until each step is done.
+This is the main thing you'll do all day. Click **"New walk-in order"** in the sidebar. You'll see two tabs at the top: **"New Order"** and **"Repair"** — pick the one that matches what the customer needs. The steps below cover a New Order; see **Repairs** further down for repair tickets.
+
+The New Order process has 4 steps, shown as tabs at the top — you can click a completed step to go back, but you can't skip ahead until each step is done.
 
 ### Step 1 — Customer
 
@@ -48,9 +50,39 @@ Once items are added, you can adjust quantity with the +/− buttons, or remove 
 - If you have a coupon code from the customer, enter it here — the discount (if the item qualifies) will be applied automatically.
 - Click **"Confirm order"**.
 
+Once confirmed, the customer receives a WhatsApp confirmation automatically (if WhatsApp is configured — ask your admin/developer if you're not sure).
+
 ### If You Get Interrupted Mid-Order
 
 If another customer walks in while you're partway through an order, it's safe to just navigate away — the app remembers your progress on this browser/computer. When you come back to "New walk-in order," it'll ask if you want to resume where you left off.
+
+---
+
+## Repairs
+
+Use the **"Repair"** tab within "New walk-in order" to log a new repair ticket, or go to **Repairs** in the sidebar to view and manage all existing repair tickets.
+
+> **Note to whoever finalizes this guide:** the exact fields on the repair creation form (e.g. how the item/frame is identified, whether it's linked to a past order or entered freeform, how the fee is entered) need to be confirmed against the actual `RepairOrderComponent` form before this section is complete. The workflow and fee logic below are based on what the backend already supports — the *exact steps and field names* need a pass once you can walk through the live form.
+
+### Creating a Repair Ticket
+
+1. From "New walk-in order," click the **"Repair"** tab.
+2. Identify the customer (same lookup/create flow as a New Order).
+3. Enter the item being repaired and a description of the issue.
+4. Enter the **repair fee**, if any — leave at ₹0 (or mark as under warranty) if the repair is free.
+5. Confirm to create the ticket. The customer receives a WhatsApp confirmation with the ticket number, item, and fee (if WhatsApp is configured).
+
+### Repair Status Workflow
+
+Repair tickets move through their own sequence, separate from order statuses:
+```
+Received → In Progress → Ready for Pickup → Collected
+```
+Cancelled is available at any point before Collected. Each status change sends the customer a WhatsApp update automatically (if configured).
+
+### Managing Repairs
+
+Go to **Repairs** in the sidebar to see all repair tickets — searchable and filterable the same way as Orders. Update a ticket's status as work progresses; the customer is notified at each step.
 
 ---
 
@@ -70,12 +102,14 @@ Pending → Confirmed → In Progress → Ready to Pick Up → Delivered
 ```
 You can only move an order to the **next** valid step — the dropdown will only show options that make sense from wherever the order currently is. **Cancelled** is available at any point before Delivered. Once an order is Delivered or Cancelled, its status can't be changed anymore.
 
+Each status change sends the customer a WhatsApp update automatically (if configured).
+
 ### Recording an Additional Payment
 
 If a customer paid a partial amount earlier and comes back to pay the rest:
 1. Open the order (**View**).
 2. In the "Record a payment" box, enter the amount they're paying now.
-3. Click **Record**. If they overpay, you'll be shown the change to give back — same as at checkout.
+3. Click **Record**. If they overpay, you'll be shown the change to give back — same as at checkout. The customer receives a WhatsApp payment confirmation automatically (if configured).
 
 ### If a Customer Wants a Refund
 
