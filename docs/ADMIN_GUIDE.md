@@ -1,6 +1,6 @@
 # Devbhoomi Opticals — Admin Guide
 
-This guide covers everything an **admin** account can do, in addition to everything in the Staff Guide (which covers walk-in orders, order management, and basic inventory browsing — read that first if you haven't).
+This guide covers everything an **admin** account can do, in addition to everything in the Staff Guide (which covers walk-in orders, order management, repairs, and basic inventory browsing — read that first if you haven't).
 
 ---
 
@@ -62,7 +62,7 @@ A complete log of every stock change — sales, restocks from cancelled orders, 
 
 ## Managing Users
 
-**Users** lets you create staff/admin accounts and view customer accounts.
+**Users** lets you create staff/admin accounts and view walk-in customer records (created automatically the first time a customer places an order — these don't have login access, they're just history).
 
 ---
 
@@ -82,6 +82,25 @@ Coupons work in both online checkout and walk-in orders. Deactivate a coupon any
 ## Orders — Bulk Actions
 
 On the Orders page, tick the checkboxes next to multiple orders to reveal a bulk action bar: change status for all selected at once (any that aren't eligible for that particular status change will be skipped and reported, not silently failed), or bulk delete. Same pattern on the Inventory page for activating/deactivating/deleting multiple products at once.
+
+---
+
+## Repairs — Admin View
+
+Repair tickets are created and managed by staff (see the Staff Guide's Repairs section for the day-to-day workflow) — as admin, you have the same visibility plus:
+
+- Full visibility into every repair ticket regardless of which staff member created it.
+- Ability to adjust the repair fee after creation if needed.
+
+> **Note:** the admin-specific repair capabilities beyond what staff can already do haven't been fully mapped out yet — confirm against the actual `RepairsComponent` whether there's admin-only editing/reporting here beyond what's listed above, and expand this section once confirmed.
+
+---
+
+## Invoices
+
+Once an order is confirmed, an invoice can be generated and delivered to the customer via WhatsApp automatically, containing a link to view/download it.
+
+> **Note:** the exact trigger for invoice generation (automatic on order confirmation vs. a manual "Generate invoice" action) and where that link/action lives in the admin UI needs to be confirmed and documented here — the backend capability exists (`WHATSAPP_TEMPLATE_INVOICE_GENERATED`), but the admin-facing trigger point isn't yet described in this guide.
 
 ---
 
@@ -113,6 +132,11 @@ Pending → Confirmed → In Progress → Ready to Pick Up → Delivered
 - Cancelled is allowed from any point before Delivered.
 - Delivered and Cancelled are both final — no further changes once reached.
 - This applies the same way whether changing one order or using bulk status update.
+
+**Repair tickets use a separate workflow** — see the Staff Guide's Repairs section:
+```
+Received → In Progress → Ready for Pickup → Collected
+```
 
 ---
 
