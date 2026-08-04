@@ -1,8 +1,8 @@
 const PDFDocument = require("pdfkit");
 const bwipjs = require("bwip-js");
 
-const BRAND_NAVY = "#1F4E5C";
-const BRAND_COPPER = "#C97B4A";
+const BRAND_DARK = "#1A1D1F";
+const BRAND_RED = "#E2231A";
 const TEXT_MUTED = "#6b7280";
 const BORDER_LIGHT = "#e5e7eb";
 
@@ -26,13 +26,13 @@ async function generateInvoicePdf(order) {
   const pageWidth = doc.page.width - 100; // usable width after margins
 
   // ---- Header band ----
-  doc.rect(0, 0, doc.page.width, 110).fill(BRAND_NAVY);
-  doc.fillColor("#fff").fontSize(24).font("Helvetica-Bold").text("Devbhoomi Opticals", 50, 35);
-  doc.fontSize(10).font("Helvetica").fillColor("#dbe6e8").text("Dehradun, Uttarakhand", 50, 65);
+  doc.rect(0, 0, doc.page.width, 110).fill(BRAND_DARK);
+  doc.fillColor("#fff").fontSize(24).font("Helvetica-Bold").text("Devbhoomi Optical", 50, 35);
+  doc.fontSize(10).font("Helvetica").fillColor("#c9c9c9").text("Dehradun, Uttarakhand", 50, 65);
 
   doc.fillColor("#fff").fontSize(11).font("Helvetica-Bold")
     .text(`INVOICE #${order.orderId}`, 50, 35, { width: pageWidth, align: "right" });
-  doc.fontSize(9).font("Helvetica").fillColor("#dbe6e8")
+  doc.fontSize(9).font("Helvetica").fillColor("#c9c9c9")
     .text(new Date(order.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" }), 50, 55, { width: pageWidth, align: "right" });
 
   doc.y = 140;
@@ -66,7 +66,7 @@ async function generateInvoicePdf(order) {
     let nameBottom = doc.y;
 
     if (item.itemDiscountPercent > 0) {
-      doc.fillColor(BRAND_COPPER).fontSize(8.5).font("Helvetica")
+      doc.fillColor(BRAND_RED).fontSize(8.5).font("Helvetica")
         .text(`${item.itemDiscountPercent}% discount applied`, 58, nameBottom + 2, { width: 250 });
       nameBottom = doc.y;
     }
@@ -115,23 +115,23 @@ async function generateInvoicePdf(order) {
   }
 
   totalRow("Subtotal (MRP)", `Rs.${subtotal.toFixed(2)}`);
-  if (itemDiscountTotal > 0) totalRow("Item discounts", `-Rs.${itemDiscountTotal.toFixed(2)}`, { color: BRAND_COPPER });
-  if (order.discountAmount > 0) totalRow(`Coupon (${order.couponCode})`, `-Rs.${order.discountAmount.toFixed(2)}`, { color: BRAND_COPPER });
+  if (itemDiscountTotal > 0) totalRow("Item discounts", `-Rs.${itemDiscountTotal.toFixed(2)}`, { color: BRAND_RED });
+  if (order.discountAmount > 0) totalRow(`Coupon (${order.couponCode})`, `-Rs.${order.discountAmount.toFixed(2)}`, { color: BRAND_RED });
   if (order.shippingCharge > 0) totalRow("Shipping", `+Rs.${order.shippingCharge.toFixed(2)}`);
 
   doc.moveDown(0.3);
   doc.moveTo(totalsX, doc.y).lineTo(50 + pageWidth, doc.y).strokeColor(BORDER_LIGHT).stroke();
   doc.moveDown(0.5);
 
-  totalRow("Total", `Rs.${order.totalAmount.toFixed(2)}`, { size: 14, bold: true, color: BRAND_NAVY });
+  totalRow("Total", `Rs.${order.totalAmount.toFixed(2)}`, { size: 14, bold: true, color: BRAND_DARK });
   totalRow("Paid", `Rs.${order.amountPaid.toFixed(2)}`);
 
   const balanceDue = Math.max(order.totalAmount - order.amountPaid, 0);
-  if (balanceDue > 0) totalRow("Balance due", `Rs.${balanceDue.toFixed(2)}`, { bold: true, color: BRAND_COPPER });
+  if (balanceDue > 0) totalRow("Balance due", `Rs.${balanceDue.toFixed(2)}`, { bold: true, color: BRAND_RED });
 
   // ---- Footer ----
   doc.fontSize(8.5).font("Helvetica").fillColor(TEXT_MUTED)
-    .text("Thank you for shopping with Devbhoomi Opticals.", 50, doc.page.height - 60, { width: pageWidth, align: "center" });
+    .text("Thank you for shopping with Devbhoomi Optical.", 50, doc.page.height - 60, { width: pageWidth, align: "center" });
 
   doc.end();
   return done;
