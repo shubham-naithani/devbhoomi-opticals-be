@@ -35,6 +35,12 @@ const REPAIR_STATUS_LABELS = {
 
 const GRAPH_API_VERSION = "v20.0";
 
+// Meta template language codes are locale-specific (e.g. "en_US"), not
+// bare "en". This must match whatever language you selected when creating
+// each template in WhatsApp Manager, or the send will fail with a
+// language-mismatch error even if the template name/params are correct.
+const DEFAULT_LANGUAGE_CODE = "en_US";
+
 function isConfigured() {
   return (
     process.env.WHATSAPP_ENABLED === "true" &&
@@ -78,7 +84,7 @@ async function sendTemplateMessage(toPhone, templateName, languageCode, paramete
     type: "template",
     template: {
       name: templateName,
-      language: { code: languageCode || "en" },
+      language: { code: languageCode || DEFAULT_LANGUAGE_CODE },
       components: [
         {
           type: "body",
@@ -118,18 +124,29 @@ function formatStatusLabel(status) {
 
 async function notifyOrderCreated(order, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_ORDER_CREATED || "order_created";
-  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, order.totalAmount]);
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [order.orderId, order.totalAmount]);
 }
 
 async function notifyOrderStatusChanged(order, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_STATUS_CHANGED || "order_status_changed";
-  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, formatStatusLabel(order.status)]);
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [
+    order.orderId,
+    formatStatusLabel(order.status),
+  ]);
 }
 
 async function notifyPaymentReceived(order, amount, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_PAYMENT_RECEIVED || "payment_received";
   const balanceDue = Math.max(order.totalAmount - order.amountPaid, 0);
-  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, amount, balanceDue]);
+  // Param order sent here is [orderId, amount, balanceDue] -> {{1}}, {{2}}, {{3}}.
+  // Make sure the approved template body in WhatsApp Manager references
+  // {{1}} as the order id, {{2}} as the amount just paid, and {{3}} as the
+  // remaining balance, in that order.
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [
+    order.orderId,
+    amount,
+    balanceDue,
+  ]);
 }
 
 async function notifyLowStock(items) {
@@ -146,7 +163,7 @@ async function notifyLowStock(items) {
     .join(", ");
   const moreCount = items.length > 5 ? ` +${items.length - 5} more` : "";
 
-  await sendTemplateMessage(adminPhone, templateName, "en", [
+  await sendTemplateMessage(adminPhone, templateName, DEFAULT_LANGUAGE_CODE, [
     items.length,
     `${summary}${moreCount}`,
   ]);
@@ -171,7 +188,10 @@ async function notifyCriticalError(errorDoc) {
 
   lastCriticalAlertAt = now;
   const shortMessage = (errorDoc.message || "Unknown error").slice(0, 100);
-  await sendTemplateMessage(adminPhone, templateName, "en", [shortMessage, errorDoc.route || "unknown"]);
+  await sendTemplateMessage(adminPhone, templateName, DEFAULT_LANGUAGE_CODE, [
+    shortMessage,
+    errorDoc.route || "unknown",
+  ]);
 }
 
 function formatRepairStatusLabel(status) {
@@ -181,12 +201,16 @@ function formatRepairStatusLabel(status) {
 async function notifyRepairCreated(ticket, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_REPAIR_CREATED || "repair_created";
   const feeNote = ticket.feeAmount > 0 ? `Fee: Rs.${ticket.feeAmount}` : "Free (under warranty)";
-  await sendTemplateMessage(customerPhone, templateName, "en", [ticket.repairId, ticket.itemName, feeNote]);
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [
+    ticket.repairId,
+    ticket.itemName,
+    feeNote,
+  ]);
 }
 
 async function notifyRepairStatusChanged(ticket, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_REPAIR_STATUS_CHANGED || "repair_status_changed";
-  await sendTemplateMessage(customerPhone, templateName, "en", [
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [
     ticket.repairId,
     ticket.itemName,
     formatRepairStatusLabel(ticket.status),
@@ -195,7 +219,7 @@ async function notifyRepairStatusChanged(ticket, customerPhone) {
 
 async function notifyInvoiceGenerated(order, invoiceUrl, customerPhone) {
   const templateName = process.env.WHATSAPP_TEMPLATE_INVOICE_GENERATED || "invoice_generated";
-  await sendTemplateMessage(customerPhone, templateName, "en", [order.orderId, invoiceUrl]);
+  await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [order.orderId, invoiceUrl]);
 }
 
 module.exports = {
@@ -206,5 +230,5 @@ module.exports = {
   notifyCriticalError,
   notifyRepairCreated,
   notifyRepairStatusChanged,
-  notifyInvoiceGenerated
+  notifyInvoiceGenerated,
 };
