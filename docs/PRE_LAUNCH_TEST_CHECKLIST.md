@@ -80,8 +80,19 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Save product → barcode auto-generated
 - [ ] Add a second variant (color/size) to the same product → works, own cost/MRP/MSP/stock
 - [ ] Manually edit stock (not via Purchases) → prompted for a reason, and that reason shows up later in Stock History
-- [ ] Print a barcode label → preview shows correct scannable barcode
 - [ ] As staff (not admin) → confirm inventory is view-only, no edit/add/delete controls available
+
+### Barcode Label Printing
+
+- [ ] QZ Tray is running and the DP27 Label Printer is reachable on the printing computer before starting these tests — confirm printing fails with a clear message (not a silent no-op) if QZ Tray is stopped
+- [ ] Print a **Box label** (single item) → preview matches, physical print comes out correctly, barcode scans
+- [ ] Print a **Frame/tag label** (single item) → text sits clearly clear of the scissor-cut, barcode starts clearly after the scissor-cut, barcode scans correctly
+- [ ] **Bulk print** 3 frame items → all 3 lanes print the correct item each, correctly separated
+- [ ] **Bulk print** 2 frame items (not a multiple of 3) → 2 lanes print correctly, 3rd lane left blank (not a wrong/duplicate label)
+- [ ] **Single print with lane targeting**: after the 2-item bulk print above, single-print a 3rd item targeting lane 3 → lands in the correct physical lane, on the same partially-used row
+- [ ] Reprint the same item twice → barcode value is identical both times (confirms it's reading the stored barcode, not regenerating one)
+- [ ] Scan a freshly printed barcode with the actual store scanner (not just visual inspection) → correct item comes up
+- [ ] Try the barcode/text nudge fields → reprint after a change → shift is visible in the expected direction
 
 ---
 
@@ -128,7 +139,7 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 
 ## 10. Dashboard (Admin)
 
-- [ ] Revenue today/week/month reflects actual cash collected, not order totals (test with a cancelled order — confirm revenue is unaffected)
+- [ ] Revenue today/week/month reflects actual cash collected, not order totals (test with a cancelled order → confirm revenue is unaffected)
 - [ ] Revenue chart, order status donut, and top products chart populate correctly once real orders exist (they'll be empty on a fresh install — that's expected, not a bug)
 - [ ] Low stock count matches actual number of items at or below their threshold
 - [ ] Recent orders list shows correct latest orders with correct status badges (color-coded correctly per status)
@@ -185,3 +196,4 @@ For each, confirm the message actually arrives on a real phone and the wording/v
 - [ ] Create an order, then immediately check Dashboard/P&L in another tab → numbers reflect it (or note if there's a caching delay)
 - [ ] Slow/unstable network (throttle in devtools) → forms don't silently fail; loading states show correctly
 - [ ] Try submitting a form with required fields empty → clear validation messages, no crash, no silent failure
+- [ ] Stop QZ Tray (or unplug the DP27) mid-session, then try to print → app reports the failure clearly rather than hanging or silently doing nothing

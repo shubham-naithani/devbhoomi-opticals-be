@@ -42,4 +42,36 @@ async function validateAndApplyCoupon(code, orderItems, itemsTotal) {
   return { coupon, discountAmount };
 }
 
-module.exports = { validateAndApplyCoupon };
+// POST /api/coupons/preview — read-only. Same rules as real checkout
+// (reuses validateAndApplyCoupon directly), but never increments
+// usageCount. Powers the Price Check tool, where nothing gets saved.
+async function previewCoupon(req, res, next) {
+  try {
+    const { code, items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "No items to check" });
+    }
+
+    const itemsTotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+    // Shape items exactly like buildOrderItemsAndDeductStock's output, since
+    // validateAndApplyCoupon reads .mspPrice/.price/.quantity off each line.
+    const { coupon, discountAmount } = await validateAndApplyCoupon(code, items, itemsTotal);
+
+    res.json({
+      valid: true,
+      discountAmount,
+      code: coupon ? coupon.code : null,
+    });
+  } catch (err) {
+    // validateAndApplyCoupon throws with statusCode for expected rejections
+    // (expired, limit reached, etc.) — surface those as a normal 400, not
+    // a 500 crash, since this is exactly the kind of thing staff need to
+    // see clearly in a quick price-check tool.
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ valid: false, message: err.message });
+    }
+    next(err);
+  }
+}
+
+module.exports = { validateAndApplyCoupon, previewCoupon };

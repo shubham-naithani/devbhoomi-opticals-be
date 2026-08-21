@@ -300,9 +300,16 @@ async function addArticle(req, res, next) {
     const sku = await generateInventorySku(product.category);
     const barcode = await generateBarcode();
     const costPrice = Number(req.body.costPrice);
-    
+
     const isMrpManual = req.body.price !== undefined && req.body.price !== null;
     const price = isMrpManual ? Number(req.body.price) : calculateMrp(costPrice);
+
+    const isMspManual = req.body.mspPrice !== undefined && req.body.mspPrice !== null;
+    const mspPrice = isMspManual ? Number(req.body.mspPrice) : calculateMsp(costPrice);
+
+    if (mspPrice > price) {
+      return res.status(400).json({ message: "MSP cannot be higher than MRP" });
+    }
 
     product.articles.push({
       ...req.body,
@@ -311,8 +318,9 @@ async function addArticle(req, res, next) {
       barcodeGeneratedAt: new Date(),
       costPrice,
       price,
-      mspPrice: calculateMsp(costPrice),
+      mspPrice,
       isMrpManual,
+      isMspManual,
     });
     await product.save();
 
@@ -334,9 +342,8 @@ async function addArticle(req, res, next) {
 async function updateArticle(req, res, next) {
   try {
     // sku, barcode, barcodeGeneratedAt: immutable once assigned.
-    // mspPrice: never client-settable — MSP is always server-derived, the hard floor.
     // stockAdjustmentReason: metadata for the stock-movement log, not an article field.
-    const { sku, barcode, barcodeGeneratedAt, mspPrice, stockAdjustmentReason, ...updates } = req.body;
+    const { sku, barcode, barcodeGeneratedAt, stockAdjustmentReason, ...updates } = req.body;
 
     const product = await Inventory.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
@@ -347,8 +354,6 @@ async function updateArticle(req, res, next) {
     const previousImages = [...(article.images || [])];
     const previousStock = article.stock;
 
-    // If stock is actually being changed by hand, a reason is required —
-    // this is the one stock-changing path with no other automatic paper trail.
     const stockChanged = updates.stock !== undefined && Number(updates.stock) !== previousStock;
     if (stockChanged && (!stockAdjustmentReason || !stockAdjustmentReason.trim())) {
       return res.status(400).json({ message: "A reason is required when manually changing stock" });
@@ -366,18 +371,36 @@ async function updateArticle(req, res, next) {
       isMrpManual = false;
     }
 
+    let isMspManual = article.isMspManual;
+    let mspPrice = article.mspPrice;
+
+    if (updates.mspPrice !== undefined && updates.mspPrice !== null) {
+      mspPrice = Number(updates.mspPrice);
+      isMspManual = true;
+    } else if (updates.isMspManual === false) {
+      isMspManual = false;
+    }
+
     Object.assign(article, updates);
 
     if (newCostPrice !== undefined && newCostPrice !== null) {
       article.costPrice = newCostPrice;
-      article.mspPrice = calculateMsp(newCostPrice); // always recalculated, no exceptions
       if (!isMrpManual) {
         mrpPrice = calculateMrp(newCostPrice);
       }
+      if (!isMspManual) {
+        mspPrice = calculateMsp(newCostPrice);
+      }
+    }
+
+    if (mspPrice > mrpPrice) {
+      return res.status(400).json({ message: "MSP cannot be higher than MRP" });
     }
 
     article.price = mrpPrice;
     article.isMrpManual = isMrpManual;
+    article.mspPrice = mspPrice;
+    article.isMspManual = isMspManual;
 
     await product.save();
 

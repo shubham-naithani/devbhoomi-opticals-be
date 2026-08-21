@@ -41,14 +41,14 @@ async function generateInventorySku(category) {
   return `${prefix}-${pad(seq, 6)}`;
 }
 
-// e.g. 89-00000012345 — Code128-compatible numeric string, not a
+// e.g. 89-000000123 — Code128-compatible numeric string, not a
 // GS1-registered EAN. "89" is just a fixed marker prefix distinguishing
 // self-issued store barcodes at a glance; continuous sequence, never
 // resets, since a barcode must never repeat across the store's lifetime
 // even if inventory categories or years change.
 async function generateBarcode() {
   const seq = await getNextSequence("barcode");
-  return `89${pad(seq, 11)}`;
+  return `89${pad(seq, 8)}`;
 }
 
 async function generatePurchaseId() {
