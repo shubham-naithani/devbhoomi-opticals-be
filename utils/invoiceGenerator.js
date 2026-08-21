@@ -59,6 +59,11 @@ async function generateInvoicePdf(order) {
   doc.y = tableTop + 24 + 10;
 
   // ---- Line items ----
+  // No per-item barcodes here — every item's barcode lives only on the
+  // physical product tag and in the order detail view (for the
+  // scan-to-popup lookup); the invoice only ever carries the one
+  // order-level barcode near the bottom of the page, so scanning an
+  // invoice always resolves to the whole order, never a single line item.
   for (const item of order.items) {
     const rowStart = doc.y;
 
@@ -79,18 +84,7 @@ async function generateInvoicePdf(order) {
     doc.font("Helvetica-Bold").fillColor("#111")
       .text(`Rs.${lineTotal.toFixed(2)}`, 445, rowStart, { width: 100, align: "right" });
 
-    let bottomY = Math.max(nameBottom, rowStart + 14);
-
-    // Barcode, right-aligned under the row
-    if (item.articleId && item.barcode) {
-      try {
-        const png = await renderBarcodePng(item.barcode);
-        doc.image(png, 58, bottomY + 6, { width: 160 });
-        bottomY += 6 + 45; // reserve space for barcode image height
-      } catch (err) {
-        console.error("[Invoice] Barcode render failed for item:", item.name, err.message);
-      }
-    }
+    const bottomY = Math.max(nameBottom, rowStart + 14);
 
     doc.y = bottomY + 14;
     doc.moveTo(50, doc.y).lineTo(50 + pageWidth, doc.y).strokeColor(BORDER_LIGHT).lineWidth(0.5).stroke();
@@ -128,6 +122,20 @@ async function generateInvoicePdf(order) {
 
   const balanceDue = Math.max(order.totalAmount - order.amountPaid, 0);
   if (balanceDue > 0) totalRow("Balance due", `Rs.${balanceDue.toFixed(2)}`, { bold: true, color: BRAND_RED });
+
+  // ---- Order barcode — scan this to pull up the whole order, not any
+  // single item. Encodes order.orderId directly (e.g. "ORD-2026-000007"),
+  // which the Orders list already searches on. Fixed near the bottom of
+  // the page (not flowing inline with the content above), centered
+  // horizontally, sitting just above the footer line.
+  const barcodeWidth = 160;
+  try {
+    const orderBarcodePng = await renderBarcodePng(order.orderId);
+    const centeredX = 50 + (pageWidth - barcodeWidth) / 2;
+    doc.image(orderBarcodePng, centeredX, doc.page.height - 130, { width: barcodeWidth });
+  } catch (err) {
+    console.error("[Invoice] Order barcode render failed:", err.message);
+  }
 
   // ---- Footer ----
   doc.fontSize(8.5).font("Helvetica").fillColor(TEXT_MUTED)
