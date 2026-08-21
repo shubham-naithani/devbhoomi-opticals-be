@@ -14,8 +14,8 @@ This guide covers everything an **admin** account can do, in addition to everyth
 4. When you pick a known brand, the category/frame type/gender fields may auto-fill based on what you've stocked under that brand before — you can still change them.
 5. Fill in the **first variant** (color, size, etc.):
    - **Cost price** — what you pay the supplier. Required.
-   - **MRP** — calculated automatically as Cost × 1.25. You can't edit this directly — it always follows cost.
-   - **MSP (minimum selling price)** — calculated automatically as Cost × 1.40 by default. This is a **discount floor**: no one can sell below this price, whether through a coupon or a manual price change at the counter. If you want to allow discounting on a specific item, check **"Manually set MSP"** and enter a value *below* the MRP — the gap between MRP and your custom MSP is how much discount that item can ever receive.
+   - **MRP** — calculated automatically as Cost × 1.40 by default. Check **"Manually set MRP"** to override with your own value instead.
+   - **MSP (minimum selling price)** — calculated automatically as Cost × 1.25 by default. This is a **discount floor**: no one can sell below this price, whether through a coupon or a manual price change at the counter. Check **"Manually set MSP"** to enter a custom value below the MRP — the gap between MRP and your custom MSP is how much discount that item can ever receive.
    - **Stock** and **low stock alert threshold** (optional — leave blank to use the store-wide default of 5).
 6. Add photos (up to 6), save.
 
@@ -31,7 +31,7 @@ Open the product → **"Manage variants"** → **"+ Add variant"**. Same fields 
 
 ### Printing a Barcode Label
 
-In "Manage variants," click **"Print label"** on any variant that has a barcode. This opens a print modal with a live preview — pick the label type, check the preview, then click **Print**.
+In "Manage variants," click **"Print label"** on any variant that has a barcode. This opens a print modal with a live preview — pick the label type, check the preview, then click **Print**. This button is **admin-only** — staff can view stock and barcodes but don't have printing access.
 
 There are two label types:
 
@@ -43,8 +43,6 @@ Both label types print through the **DP27 Label Printer** — there's no more "o
 **Bulk printing:** from the Inventory list, select multiple variants and choose the bulk print option. Frame labels fill lanes left-to-right, 3 per row — if the last row doesn't divide evenly (e.g. you printed 2 items), the 3rd lane in that row is left blank rather than wasted on a partial/incorrect label.
 
 **Single print + reusing a leftover lane:** if a previous bulk print left a lane blank (as above), or you just need to reprint one item, use the single-print option and set the **lane number (1, 2, or 3)** field to target that exact physical lane instead of starting a fresh row and wasting the other two.
-
-> **Note to whoever finalizes this guide:** confirm whether the "Print label" button is visible to staff accounts too, or admin-only as the current guide structure assumes — if staff also use it day to day, move this section (or a summary of it) into the Staff Guide as well.
 
 ### Low Stock Alerts
 
@@ -61,7 +59,7 @@ When new stock arrives from a supplier, use **Purchases** instead of manually ed
 3. Search for the product, pick the variant, click **Add** — then set the **quantity received** and the **unit cost** on this delivery (pre-filled with the item's current cost, but editable if the price changed).
 4. Save.
 
-This automatically: increases stock by the quantity received, updates the article's cost to the new unit cost, and recalculates MRP (and MSP, unless you've manually locked it). It also keeps a permanent record you can look back on later.
+This automatically: increases stock by the quantity received, updates the article's cost to the new unit cost, and recalculates MRP and MSP — unless either one has been manually locked (see "Manually set MRP" / "Manually set MSP" above), in which case that locked value is left untouched. It also keeps a permanent record you can look back on later.
 
 **Note:** Purchases only works for products that already exist in your catalog — if it's a genuinely new product you've never stocked, create it in Inventory first, then log future deliveries through Purchases.
 
@@ -88,7 +86,17 @@ A complete log of every stock change — sales, restocks from cancelled orders, 
 
 **Important:** a coupon can never push an item's price below its MSP. If you want an item to actually be discountable, you need to manually lower that item's MSP below its MRP first (see the Inventory section above) — otherwise applying a coupon to that item will succeed but apply **₹0 discount**, which is intentional, not a bug.
 
-Coupons work in both online checkout and walk-in orders. Deactivate a coupon anytime from this page without deleting it (keeps its usage history).
+Coupons work in both online checkout and walk-in orders. A coupon and a per-item manual discount can't both be applied to the same order — using one disables the other in the walk-in order screen and in Quick Price Check. Deactivate a coupon anytime from this page without deleting it (keeps its usage history).
+
+---
+
+## Quick Price Check
+
+A "Quick Price Check" button appears on the Dashboard (both admin and staff see it). It's for answering "what would this cost?" on the spot — a customer picks up a few frames and wants a price before committing to a purchase, or before deciding between a few options.
+
+Scan (or type) each item's barcode to add it to the running list. Each item has its own discount % field — the price will never go below that item's MSP, the same rule as everywhere else in the app. You can also check a coupon code against the whole list; a coupon and per-item discounts can't be used together, same restriction as checkout.
+
+**Nothing here is saved** — closing the window discards the whole list. If the customer decides to buy, click **"Start walk-in order with these items"** — this opens a real walk-in order with those items already added, so whoever's at the counter just needs to pick or create the customer and continue as normal from there.
 
 ---
 
@@ -111,15 +119,17 @@ Repair tickets are created and managed by staff (see the Staff Guide's Repairs s
 
 ## Invoices
 
-Once an order is confirmed, an invoice can be generated and delivered to the customer via WhatsApp automatically, containing a link to view/download it.
+Once an order exists, click **"Generate invoice"** in that order's detail view (**View → Invoice** section) to create a PDF and deliver it to the customer via WhatsApp automatically, containing a link to view/download it. If you need to update it later (e.g. after a payment or status change), the same section shows **"Regenerate & resend"** instead.
 
-> **Note:** the exact trigger for invoice generation (automatic on order confirmation vs. a manual "Generate invoice" action) and where that link/action lives in the admin UI needs to be confirmed and documented here — the backend capability exists (`WHATSAPP_TEMPLATE_INVOICE_GENERATED`), but the admin-facing trigger point isn't yet described in this guide.
+The invoice carries a single barcode encoding the order's own ID (e.g. `ORD-2026-000123`), centered near the bottom of the page — scanning it (or typing the order ID into the Orders search box) pulls that order straight up. It does **not** carry a separate barcode per item; those live only on the physical product tags and inside the order's own detail view (see "Looking Up an Item From a Past Order" in the Staff Guide).
 
 ---
 
 ## Dashboard
 
 Your at-a-glance view: revenue (today/week/month), order status breakdown, top-selling products, a 7-day revenue trend, recent orders, and low-stock items. Revenue here reflects **actual cash collected**, not just order totals — a cancelled or unpaid order won't inflate this number.
+
+The **"Quick Price Check"** button also lives here — see the section above.
 
 ---
 
@@ -138,21 +148,3 @@ A record of every meaningful action taken in the system (who created/edited/dele
 ---
 
 ## Order Status Workflow (Reference)
-
-```
-Pending → Confirmed → In Progress → Ready to Pick Up → Delivered
-```
-- Cancelled is allowed from any point before Delivered.
-- Delivered and Cancelled are both final — no further changes once reached.
-- This applies the same way whether changing one order or using bulk status update.
-
-**Repair tickets use a separate workflow** — see the Staff Guide's Repairs section:
-```
-Received → In Progress → Ready for Pickup → Collected
-```
-
----
-
-## A Note on Pricing Logic
-
-Since this comes up often: **MRP is never something you type in directly** — it's always Cost × 1.25, automatically. If you want a different customer-facing price, the way to do that is by adjusting the **cost price**, which then recalculates MRP for you. This keeps pricing consistent and avoids MRP silently drifting away from actual cost over time.
