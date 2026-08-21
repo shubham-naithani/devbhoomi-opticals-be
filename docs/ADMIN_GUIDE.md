@@ -31,7 +31,20 @@ Open the product → **"Manage variants"** → **"+ Add variant"**. Same fields 
 
 ### Printing a Barcode Label
 
-In "Manage variants," click **"Print label"** on any variant that has a barcode. A preview opens with the scannable barcode — click **Print**. This works with a regular printer and sticker paper, or a dedicated label printer if you get one later.
+In "Manage variants," click **"Print label"** on any variant that has a barcode. This opens a print modal with a live preview — pick the label type, check the preview, then click **Print**.
+
+There are two label types:
+
+- **Box label** — a 50×50mm square label, everything (store name, product, variant, barcode) stacked top to bottom on one sticker.
+- **Frame/tag label** — the dumbbell-shaped tag meant to be tied onto a frame with string: brand/product/variant text on one end, a scissor-cut in the middle, and the barcode on the other end. These print 3-across on the roll (the printer's stock is 3 lanes wide).
+
+Both label types print through the **DP27 Label Printer** — there's no more "or print on a regular printer" fallback; both go through the same dedicated label printer (see the Technical Setup Guide for what needs to be running on the printing computer for this to work — if Print does nothing or errors out, that's the first thing to check).
+
+**Bulk printing:** from the Inventory list, select multiple variants and choose the bulk print option. Frame labels fill lanes left-to-right, 3 per row — if the last row doesn't divide evenly (e.g. you printed 2 items), the 3rd lane in that row is left blank rather than wasted on a partial/incorrect label.
+
+**Single print + reusing a leftover lane:** if a previous bulk print left a lane blank (as above), or you just need to reprint one item, use the single-print option and set the **lane number (1, 2, or 3)** field to target that exact physical lane instead of starting a fresh row and wasting the other two.
+
+> **Note to whoever finalizes this guide:** confirm whether the "Print label" button is visible to staff accounts too, or admin-only as the current guide structure assumes — if staff also use it day to day, move this section (or a summary of it) into the Staff Guide as well.
 
 ### Low Stock Alerts
 

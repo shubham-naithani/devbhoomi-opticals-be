@@ -119,6 +119,49 @@ Set these in Azure App Service (Configuration → Application Settings), not in 
 
 ---
 
+## Barcode Label Printing (QZ Tray + DP27)
+
+Label printing (both the 50×50mm box label and the dumbbell-shaped frame/tag label) does **not** go through the browser's normal print dialog — it's sent from the frontend to **QZ Tray**, a small local agent that must be running on whichever computer is physically connected to the label printer, which then forwards the job to the printer. If printing silently does nothing, or the app reports it can't connect, this local setup — not the web app itself — is almost always where to look first.
+
+### One-time setup on the printing computer
+
+1. Install **QZ Tray** (download from qz.io) on the computer connected to the printer. It needs to be running (usually via its system tray icon) whenever labels are printed — it's a background agent, not something staff open and interact with directly.
+
+   > **Note to whoever finalizes this guide:** confirm and document here whether this deployment's QZ Tray install uses a signed certificate (so the one-time "unsafe website wants to access..." browser permission prompt is trusted automatically) or the default unsigned setup (where that prompt has to be clicked through — and may reappear if it's ever dismissed with "always block" by mistake). Fill in the actual steps taken, since this determines what a staff member sees the first time printing is used on a new/reset computer.
+
+2. Install the **DP27 label printer**'s driver on that same computer and confirm it appears in the OS's printer list.
+
+3. **The printer must be named exactly `DP27 Label Printer` in the OS printer list** — this exact string is hardcoded into the app's print configuration for both label types. If Windows (or whichever OS) installs it under a different name, either rename it to match in the printer settings, or this needs a small code change to match whatever name it actually installed under.
+
+4. Load the label stock: 50×50mm square sticker stock for box labels, or the 3-lane-wide dumbbell/tag roll (each lane 15mm wide, 100mm long, with a pre-cut scissor perforation at the midpoint of the printable head) for frame labels. These likely need to be swapped depending which label type is in use, unless separate printers are set up for each.
+
+### The two label types
+
+- **Box label** — 50×50mm square, contents stacked top-to-bottom (store name, product, variant, then barcode). Straightforward — no calibration needed.
+- **Frame/tag label** — the dumbbell/barbell-shaped tag meant to be tied onto a frame. Physically: a 6.4cm-long printable "head," with a scissor-cut at its exact midpoint (3.2cm in), splitting it into a text zone and a barcode zone, followed by a blank neck (narrower than the head) and loop for string. Printed 3 tags across per row, matching the roll's 3-lane width.
+
+### Frame label calibration (only needed if the printer, stock, or roll changes)
+
+These fields live in the print modal (frame mode) and are normally left alone once tuned for the current roll of stock — they were calibrated against physically measured labels, not guessed:
+
+| Field | What it controls |
+|---|---|
+| Text zone (cm) | Length of the text (brand/product/variant) portion of the head, measured from the leading edge |
+| Cut gap (cm) | Blank buffer straddling the scissor-cut perforation, split evenly across it |
+| Barcode zone (cm) | Length of the barcode portion of the head, immediately after the cut gap |
+| Head total length (cm) | Full length of the printable head (measured on this stock: 6.4cm) |
+| Gap between lanes (cm) | Blank spacing between the 3 side-by-side lanes on the roll |
+| Content prints first (leading edge) | Whether the printed head lands at the leading or trailing edge as the tag feeds through the printer — leave checked unless prints come out mirrored/upside-down |
+| Barcode nudge (cm) | Small manual shift of just the barcode, independent of the zone fields above, for fine-tuning after the zone fields are already close |
+| Text nudge (cm) | Same idea, for the text block |
+| Single print — lane (1/2/3) | Which physical lane a single (non-bulk) print targets — used to reuse a lane a previous bulk print left blank |
+
+**Important constraint:** Text zone + Cut gap must always add up to the real physical position of the scissor-cut on the stock (measured at 3.2cm from the leading edge on this roll). Changing Text zone or Cut gap without preserving that relationship will make the barcode start before or after the actual cut, not just move it within its own zone. If the label stock is ever replaced with a different roll, re-measure the physical cut position first, then set Text zone + half the Cut gap to match it, before touching anything else.
+
+**If a barcode won't scan:** this is very unlikely to be a bar-width/size issue at the current settings — narrower rendering was tried and made things worse, because CODE128 barcodes need a blank "quiet zone" on each side to be found by the scanner at all, and thermal print has a real minimum resolvable bar width (roughly 2px at this printer's ~203dpi). If scanning issues come back after a stock or printer change, check quiet zone and minimum bar width before assuming it's a positioning problem.
+
+---
+
 ## Error Monitoring
 
 The system automatically catches and logs unexpected errors — no third-party service (like Sentry) is used; everything is stored in your own MongoDB database and viewable from the admin **Error Log** page.
@@ -152,3 +195,4 @@ If you ever need to verify this is still working after a deployment change: temp
 - Database: MongoDB Atlas — confirm automated backups are enabled on your plan tier.
 - CORS: `CLIENT_ORIGIN` must exactly match the deployed frontend URL, not localhost, once live.
 - **Network note:** if WhatsApp API calls fail with a generic `"fetch failed"` (not a structured JSON error from Meta) while testing locally, this can be an ISP-level block on `graph.facebook.com` rather than a code/config issue — some Indian ISPs have been observed resetting connections to this specific domain while leaving normal Facebook/WhatsApp browsing traffic unaffected. Test with `curl -i https://graph.facebook.com/v20.0/` — a real (even error) JSON response means connectivity is fine; a connection reset means it's network-level. This has not been observed as an issue on Azure's own outbound network, only certain home ISPs during local development.
+- **Label printing is entirely local to the printing computer** (QZ Tray + the DP27 driver) — it isn't affected by Azure deployment at all, and doesn't need any env var. It only matters at the physical store, on whichever computer is connected to the printer.
