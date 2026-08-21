@@ -38,6 +38,10 @@ const articleSchema = new mongoose.Schema({
     type: Number,
     min: 0,
   },
+  isMspManual: {
+    type: Boolean,
+    default: false,
+  },
   isMrpManual: {
     type: Boolean,
     default: false,
