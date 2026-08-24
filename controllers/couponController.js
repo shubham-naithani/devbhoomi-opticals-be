@@ -42,9 +42,13 @@ async function createCoupon(req, res, next) {
 
 async function getCoupons(req, res, next) {
   try {
-    const { search, page = 1, limit = 20 } = req.query;
+    // includeCampaignIssued=true is used by the Marketing > Logs view, which wants to see the
+    // one-time per-recipient codes too. The regular Coupons screen (default) hides them so the
+    // admin-facing list stays just the reusable/manually-created coupons, same as today.
+    const { search, page = 1, limit = 20, includeCampaignIssued = "false" } = req.query;
     const filter = {};
     if (search) filter.code = { $regex: search, $options: "i" };
+    if (includeCampaignIssued !== "true") filter.isCampaignIssued = { $ne: true };
 
     const skip = (Number(page) - 1) * Number(limit);
     const [coupons, total] = await Promise.all([
@@ -61,11 +65,19 @@ async function getCoupons(req, res, next) {
 async function updateCoupon(req, res, next) {
   try {
     const { code, usageCount, ...updates } = req.body; // code and usageCount are never editable after creation
-    const coupon = await Coupon.findByIdAndUpdate(req.params.id, updates, {
+
+    const existing = await Coupon.findById(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Coupon not found" });
+
+    // A campaign-issued (per-recipient, one-time) code was minted for a specific person's WhatsApp
+    // message — it shouldn't be repurposed into a general coupon by editing its rules after the fact.
+    // The only thing that's safe to change on one of these is deactivating it.
+    const safeUpdates = existing.isCampaignIssued ? { isActive: updates.isActive } : updates;
+
+    const coupon = await Coupon.findByIdAndUpdate(req.params.id, safeUpdates, {
       returnDocument: "after",
       runValidators: true,
     });
-    if (!coupon) return res.status(404).json({ message: "Coupon not found" });
 
     await logAudit({
       entityType: "Order",

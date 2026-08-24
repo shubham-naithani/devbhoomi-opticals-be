@@ -9,7 +9,7 @@ const { logTransaction } = require("../utils/transactionLogger");
 const { notifyOrderCreated, notifyOrderStatusChanged, notifyPaymentReceived } = require("../services/whatsappService");
 const { SHIPPING_FEE } = require("../utils/pricing");
 const { logStockMovement } = require("../utils/stockMovementLogger");
-const { validateAndApplyCoupon } = require("../utils/couponEngine");
+const { validateAndApplyCoupon, creditReferralPoints, clampPointsRedemption, redeemPoints } = require("../utils/couponEngine");
 const Coupon = require("../models/Coupon");
 const RepairTicket = require("../models/RepairTicket");
 const { generateInvoicePdf } = require("../utils/invoiceGenerator");
@@ -219,7 +219,7 @@ async function createOrder(req, res, next) {
 async function createWalkInOrder(req, res, next) {
   const session = await mongoose.startSession();
   try {
-    const { customerId, items, paymentMethod, amountPaid, prescriptionUsed, notes, couponCode } = req.body;
+    const { customerId, items, paymentMethod, amountPaid, prescriptionUsed, notes, couponCode, pointsToRedeem } = req.body;
 
     if (!customerId) {
       return res.status(400).json({ message: "Customer is required" });
@@ -256,7 +256,16 @@ async function createWalkInOrder(req, res, next) {
          orderItems,
          itemsTotal,
        );
-       const totalAmount = Math.max(itemsTotal - discountAmount, 0);
+       const afterCouponTotal = Math.max(itemsTotal - discountAmount, 0);
+
+       // Points (earned from referrals) are a separate mechanism from the coupon/
+       // item-discount pair above — they're the customer's own balance rather than
+       // a promotional code, so they're allowed to stack on top of either. Re-fetch
+       // the customer inside the transaction (session-scoped) so the clamp reads an
+       // up-to-date balance rather than the copy fetched before the transaction opened.
+       const customerInTxn = await User.findById(customerId).session(session);
+       const pointsRedeemed = clampPointsRedemption(customerInTxn, pointsToRedeem, afterCouponTotal);
+       const totalAmount = Math.max(afterCouponTotal - pointsRedeemed, 0);
 
        const orderId = await generateOrderId();
 
@@ -276,6 +285,7 @@ async function createWalkInOrder(req, res, next) {
              totalAmount,
              couponCode: coupon ? coupon.code : undefined,
              discountAmount,
+             pointsRedeemed,
              amountPaid: paidNow,
              changeGiven: changeDue,
              paymentMethod: method,
@@ -297,7 +307,16 @@ async function createWalkInOrder(req, res, next) {
            { $inc: { usageCount: 1 } },
            { session },
          );
+         // NEW — referral points: only fires if the coupon is a referral coupon
+         // (creditReferralPoints no-ops otherwise), same transaction as the order
+         // and the usageCount bump above, so all three succeed or fail together.
+         await creditReferralPoints(coupon, createdOrder, session);
        }
+
+       // NEW — points redemption: separate from the coupon block above since
+       // points can be spent whether or not a coupon was also used. Only writes
+       // anything if pointsRedeemed > 0 (redeemPoints no-ops otherwise).
+       await redeemPoints(customerId, pointsRedeemed, createdOrder, session);
 
        if (paidNow > 0) {
          await logTransaction(
