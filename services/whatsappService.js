@@ -61,11 +61,16 @@ function formatPhone(phone) {
   return null;
 }
 
+// Returns true if the message was actually handed to the API (or accepted
+// in stub mode) and false if it was skipped/failed — callers that only
+// care about fire-and-forget delivery (order/repair/invoice notifications)
+// can keep ignoring the return value exactly as before; Marketing's
+// sendCoupon uses it to record whatsappStatus on the issued coupon.
 async function sendTemplateMessage(toPhone, templateName, languageCode, parameters) {
   const formattedPhone = formatPhone(toPhone);
   if (!formattedPhone) {
     console.log(`[WhatsApp] Skipped — no valid phone number for template "${templateName}"`);
-    return;
+    return false;
   }
 
   if (!isConfigured()) {
@@ -73,7 +78,7 @@ async function sendTemplateMessage(toPhone, templateName, languageCode, paramete
       `[WhatsApp STUB] Would send template "${templateName}" to ${formattedPhone} with params:`,
       parameters
     );
-    return;
+    return true;
   }
 
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -107,12 +112,15 @@ async function sendTemplateMessage(toPhone, templateName, languageCode, paramete
     if (!res.ok) {
       const errText = await res.text();
       console.error(`[WhatsApp] Failed to send "${templateName}" to ${formattedPhone}:`, errText);
+      return false;
     }
+    return true;
   } catch (err) {
     // Never throw — every call site already treats this as fire-and-forget
     // (.catch(() => {})), but logging here too helps spot real delivery
     // problems rather than them silently vanishing.
     console.error(`[WhatsApp] Network error sending "${templateName}":`, err.message);
+    return false;
   }
 }
 
@@ -222,6 +230,25 @@ async function notifyInvoiceGenerated(order, invoiceUrl, customerPhone) {
   await sendTemplateMessage(customerPhone, templateName, DEFAULT_LANGUAGE_CODE, [order.orderId, invoiceUrl]);
 }
 
+// --- Marketing (new) -------------------------------------------------------
+// This is a 9th template, distinct from the 8 already in WhatsApp Manager —
+// it needs to be created and approved by Meta before real sends will work.
+// Until then this behaves exactly like every other notify* function during
+// setup: stub-mode console.log if WHATSAPP_ENABLED isn't "true" yet.
+function formatDiscountText(coupon) {
+  return coupon.discountType === "percentage" ? `${coupon.value}% off` : `Rs.${coupon.value} off`;
+}
+
+async function notifyCouponIssued(recipientPhone, recipientName, coupon) {
+  const templateName = process.env.WHATSAPP_TEMPLATE_COUPON_ISSUED || "coupon_issued";
+  // Param order: [name, couponCode, discountText] -> {{1}}, {{2}}, {{3}} in the approved template body.
+  return sendTemplateMessage(recipientPhone, templateName, DEFAULT_LANGUAGE_CODE, [
+    recipientName || "there",
+    coupon.code,
+    formatDiscountText(coupon),
+  ]);
+}
+
 module.exports = {
   notifyOrderCreated,
   notifyOrderStatusChanged,
@@ -231,4 +258,5 @@ module.exports = {
   notifyRepairCreated,
   notifyRepairStatusChanged,
   notifyInvoiceGenerated,
+  notifyCouponIssued,
 };

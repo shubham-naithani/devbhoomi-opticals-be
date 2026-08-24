@@ -80,8 +80,13 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    pointsBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Hash password before saving, only if it was changed
