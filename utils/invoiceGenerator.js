@@ -23,7 +23,7 @@ async function generateInvoicePdf(order) {
   doc.on("data", (chunk) => chunks.push(chunk));
   const done = new Promise((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  const pageWidth = doc.page.width - 100; // usable width after margins
+  const pageWidth = doc.page.width - 100;
 
   // ---- Header band ----
   doc.rect(0, 0, doc.page.width, 110).fill(BRAND_DARK);
@@ -59,11 +59,7 @@ async function generateInvoicePdf(order) {
   doc.y = tableTop + 24 + 10;
 
   // ---- Line items ----
-  // No per-item barcodes here — every item's barcode lives only on the
-  // physical product tag and in the order detail view (for the
-  // scan-to-popup lookup); the invoice only ever carries the one
-  // order-level barcode near the bottom of the page, so scanning an
-  // invoice always resolves to the whole order, never a single line item.
+  // invoice always resolves to the whole order.
   for (const item of order.items) {
     const rowStart = doc.y;
 
@@ -111,6 +107,9 @@ async function generateInvoicePdf(order) {
   totalRow("Subtotal (MRP)", `Rs.${subtotal.toFixed(2)}`);
   if (itemDiscountTotal > 0) totalRow("Item discounts", `-Rs.${itemDiscountTotal.toFixed(2)}`, { color: BRAND_RED });
   if (order.discountAmount > 0) totalRow(`Coupon (${order.couponCode})`, `-Rs.${order.discountAmount.toFixed(2)}`, { color: BRAND_RED });
+  // invoice explains the full gap between MRP and what was collected —
+  // matching the fix made to the order detail panel for the same reason.
+  if (order.pointsRedeemed > 0) totalRow("Points redeemed", `-Rs.${order.pointsRedeemed.toFixed(2)}`, { color: BRAND_RED });
   if (order.shippingCharge > 0) totalRow("Shipping", `+Rs.${order.shippingCharge.toFixed(2)}`);
 
   doc.moveDown(0.3);
@@ -124,10 +123,7 @@ async function generateInvoicePdf(order) {
   if (balanceDue > 0) totalRow("Balance due", `Rs.${balanceDue.toFixed(2)}`, { bold: true, color: BRAND_RED });
 
   // ---- Order barcode — scan this to pull up the whole order, not any
-  // single item. Encodes order.orderId directly (e.g. "ORD-2026-000007"),
-  // which the Orders list already searches on. Fixed near the bottom of
-  // the page (not flowing inline with the content above), centered
-  // horizontally, sitting just above the footer line.
+  // single item. Encodes order.orderId directly (e.g. "ORD-2026-000007")
   const barcodeWidth = 160;
   try {
     const orderBarcodePng = await renderBarcodePng(order.orderId);

@@ -87,7 +87,48 @@ async function listLeads(req, res, next) {
       Lead.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
       Lead.countDocuments(filter),
     ]);
-    res.json({ leads, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
+
+    const phones = leads.map((l) => l.phone);
+
+    // NEW — "last contacted" and "converted" status, computed live rather than stored on the
+    // Lead document. There's no separate MarketingLog collection: a sent campaign coupon IS a
+    // Coupon with isCampaignIssued: true, and it already carries recipientPhone + sentAt (see
+    // sendCoupon / getMarketingLogs below) — so the most recent send per lead is just a lookup
+    // against Coupon, not a new field to keep in sync.
+    // whatsappStatus: "sent" only — a Coupon doc is created even when the WhatsApp send fails
+    // (see sendCoupon), so filtering on isCampaignIssued alone would mark someone "Contacted"
+    // even though the message never actually reached them.
+    const sends = phones.length
+      ? await Coupon.find(
+          { isCampaignIssued: true, whatsappStatus: "sent", recipientPhone: { $in: phones } },
+          { recipientPhone: 1, sentAt: 1 }
+        ).sort({ sentAt: -1 })
+      : [];
+    const lastSentByPhone = {};
+    for (const s of sends) {
+      // sorted desc above, so the first entry seen per phone is the most recent send.
+      if (!lastSentByPhone[s.recipientPhone]) lastSentByPhone[s.recipientPhone] = s.sentAt;
+    }
+
+    // "Converted" = this lead has since placed an order — matches the Lead schema's own
+    // comment ("once they place their first order they show up in the Existing Customers tab
+    // instead"). Checked against Order.contactPhone directly, the same field the Existing
+    // Customers tab's data ultimately traces back to, rather than re-deriving via User.
+    const convertedOrders = phones.length
+      ? await Order.find(
+          { contactPhone: { $in: phones }, isDeleted: { $ne: true } },
+          { contactPhone: 1 }
+        )
+      : [];
+    const convertedPhones = new Set(convertedOrders.map((o) => o.contactPhone));
+
+    const enrichedLeads = leads.map((lead) => ({
+      ...lead.toObject(),
+      lastCouponSentAt: lastSentByPhone[lead.phone] || null,
+      converted: convertedPhones.has(lead.phone),
+    }));
+
+    res.json({ leads: enrichedLeads, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (err) {
     next(err);
   }
