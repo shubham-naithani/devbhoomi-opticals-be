@@ -29,6 +29,15 @@ Open the product → **"Manage variants"** → **"+ Add variant"**. Same fields 
 
 **If you're only changing stock manually** (not through a supplier delivery — see Purchases below), you'll be asked for a **reason** the moment you change the stock number. This is required — it's what makes the Stock History page useful later ("why did this change?").
 
+### Activating and Deactivating Products & Variants
+
+Every product and every variant carries an **Active / Inactive** flag, and there are two independent ways to control it:
+
+- **Product-level toggle** (bulk): from Inventory's product list or a product's detail view, toggling a product's Active/Inactive status **cascades to every one of its variants** in the same action — deactivating a product deactivates all its variants, and reactivating it reactivates all of them. This is a one-time cascade at the moment you toggle the product, not a live rule.
+- **Per-variant toggle** (fine-grained): inside "Manage variants," each individual variant also has its own **Activate/Deactivate** button, independent of the product-level toggle. Use this when only one variant of a multi-variant product should stop being sold (e.g. a discontinued color) while the rest of the product stays active. Toggling a single variant this way does **not** change the product's own Active/Inactive status — the cascade only runs product → variants, never variant → product.
+
+**Where this status is enforced:** New Order (barcode scan and name search) hard-blocks deactivated items with a clear message. Quick Price Check is a look-up tool, not a sale, so it shows a **"Discontinued"** badge instead of blocking (see "Quick Price Check" below). Inventory's own admin table always shows a product's real price and stock regardless of status.
+
 ### Printing a Barcode Label
 
 In "Manage variants," click **"Print label"** on any variant that has a barcode. This opens a print modal with a live preview — pick the label type, check the preview, then click **Print**. This button is **admin-only** — staff can view stock and barcodes but don't have printing access.
@@ -75,6 +84,10 @@ A complete log of every stock change — sales, restocks from cancelled orders, 
 
 **Users** lets you create staff/admin accounts and view walk-in customer records (created automatically the first time a customer places an order — these don't have login access, they're just history).
 
+- The **email column has been removed** from the Users table to keep the list focused on the fields staff actually use day to day (name, phone, role, status). A user's email is still stored and editable from their detail view — it's just no longer shown as a table column.
+- Each user's **order-count badge is now clickable**: clicking it takes you straight to Orders, pre-filtered to that customer's orders.
+- **Delete has been replaced with Activate/Deactivate**, matching the same pattern now used on Orders and Repairs — this preserves order history rather than letting it be destroyed by mistake.
+
 ---
 
 ## Coupons & Discounts
@@ -98,17 +111,21 @@ Scan (or type) each item's barcode to add it to the running list. Each item has 
 
 **Nothing here is saved** — closing the window discards the whole list. If the customer decides to buy, click **"Start walk-in order with these items"** — this opens a real walk-in order with those items already added, so whoever's at the counter just needs to pick or create the customer and continue as normal from there.
 
+**Discontinued items:** if a scanned/searched item is deactivated (product or variant), it still appears in the list with a **"Discontinued"** badge — the lookup itself is never blocked. The "Start walk-in order" button is disabled outright if every line is discontinued. If the lines are a mix of active and discontinued items, starting the walk-in order silently drops the discontinued line(s) with an informational toast explaining how many were dropped, and only carries the active line(s) over — this prevents a discontinued item from riding invisibly into a cart and only failing at final checkout.
+
 ---
 
 ## Orders — Bulk Actions
 
-On the Orders page, tick the checkboxes next to multiple orders to reveal a bulk action bar: change status for all selected at once (any that aren't eligible for that particular status change will be skipped and reported, not silently failed), or bulk delete. Same pattern on the Inventory page for activating/deactivating/deleting multiple products at once.
+On the Orders page, tick the checkboxes next to multiple orders to reveal a bulk action bar: change status for all selected at once (any that aren't eligible for that particular status change will be skipped and reported, not silently failed), or bulk **Activate/Deactivate** — hard Delete has been removed from Orders (matching the same change on Users and Repairs, which also moved from Delete to Activate/Deactivate this release, to preserve history instead of destroying it). Same pattern on the Inventory page for activating/deactivating/deleting multiple products at once.
+
+> **Note to whoever finalizes this guide:** the exact current wording/icon of the Orders bulk-action bar hasn't been independently re-confirmed against the live component — worth a quick screenshot check before publishing.
 
 ---
 
 ## Repairs — Admin View
 
-Repair tickets are created and managed by staff (see the Staff Guide's Repairs section for the day-to-day workflow) — as admin, you have the same visibility plus:
+Repair tickets are created and managed by staff (see the Staff Guide's Repairs section for the day-to-day workflow), which now also includes two entry points worth knowing about: starting a repair directly from an order's detail panel via a per-item **Repair** deep-link, and an **"Add the item without an invoice"** path for items that don't match a past purchase. As admin, you have the same visibility plus:
 
 - Full visibility into every repair ticket regardless of which staff member created it.
 - Ability to adjust the repair fee after creation if needed.
@@ -144,6 +161,13 @@ The detailed transaction list below the summary shows every individual payment a
 ## Activity Log
 
 A record of every meaningful action taken in the system (who created/edited/deleted what, and when) — useful for accountability and troubleshooting "who changed this."
+
+## Working With List Pages
+
+Every list page in the admin panel — Inventory, Purchases, Stock History, Users, Coupons, Orders, Repairs, Audit Log, Error Log, P&L, and the Marketing/customer tabs — now has a consistent pagination control at the bottom:
+
+- A **"Per page"** dropdown lets you choose 5, 10, 20, 50, or 100 records per page. It reflects the *configured* fetch size, not the number of records currently visible — if set to 10 but only 5 records exist on the current filter, it will still show "10" (that's the setting); the "Showing X–Y of Z" text next to it gives the accurate live count.
+- Changing the page size resets to page 1 and re-fetches with the new limit.
 
 ---
 

@@ -24,6 +24,9 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Add an eye test with readings for both eyes + pupillary distance → saves correctly
 - [ ] Add an item by scanning/typing a barcode → correct item added
 - [ ] Add an item by searching name/brand → correct variant selectable when multiple colors/sizes exist
+- [ ] Scan or search for a **deactivated product or variant** → blocked with a clear toast/message, never added to the cart
+- [ ] In the item search-results list, an item with no sellable variant shows "No longer available for sale" instead of an Add button that silently fails
+- [ ] A multi-variant product's dropdown in the search results only lists sellable variants (out-of-stock variants show as disabled, not hidden)
 - [ ] Adjust quantity with +/− → total recalculates correctly
 - [ ] Remove an item → total recalculates, stock isn't affected until order is confirmed
 - [ ] Apply a valid coupon → discount applied correctly
@@ -40,6 +43,11 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 ## 3. Walk-In Order — Repair Flow
 
 - [ ] Switch to "Repair" tab within walk-in order → correct form shown
+- [ ] Step 2 barcode scan correctly matches a purchased item and moves to the item picker
+- [ ] "Add the item without an invoice" path works for an item with no matching order → ticket proceeds without a warranty attached
+- [ ] Step 2's "Change item" button and Step 3's "← Back" button are both present and each does something distinct (no redundant duplicate "← Back" visible in both steps at once)
+- [ ] Starting a repair from an **Orders detail panel's per-item Repair button** correctly deep-links into the Repair tab with customer, order, and item pre-filled
+- [ ] An in-progress repair ticket can be resumed after navigating away, and **Start over** fully clears it
 - [ ] Create a repair ticket with a fee → ticket created, correct fee recorded
 - [ ] Create a repair ticket marked free/under warranty → ticket created with ₹0 fee, correct wording shown
 - [ ] Customer receives WhatsApp repair-created confirmation
@@ -66,7 +74,8 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Refund now → refund recorded immediately
 - [ ] Mark refund as pending → then later "Settle refund" → completes correctly
 - [ ] Bulk-select multiple orders → bulk status change works, ineligible ones reported (not silently skipped) rather than causing an error
-- [ ] Bulk delete → works as expected
+- [ ] Orders bulk-action bar shows **Activate/Deactivate**, not Delete — hard delete is no longer reachable from the UI
+- [ ] Deactivating an order does not remove it from order history or break its detail view
 
 ---
 
@@ -81,6 +90,11 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Add a second variant (color/size) to the same product → works, own cost/MRP/MSP/stock
 - [ ] Manually edit stock (not via Purchases) → prompted for a reason, and that reason shows up later in Stock History
 - [ ] As staff (not admin) → confirm inventory is view-only, no edit/add/delete controls available
+- [ ] Deactivating a product at the product level cascades **Inactive** to every one of its variants in the same action
+- [ ] Reactivating a product cascades **Active** back to every variant
+- [ ] Deactivating/reactivating a single variant via its own per-variant toggle does **not** change the parent product's own Active/Inactive status
+- [ ] Inventory's own admin table still shows correct price/stock for a deactivated product
+- [ ] A deactivated product/variant cannot be added via New Order but still appears (with a Discontinued badge) in Price Check
 
 ### Barcode Label Printing
 
@@ -132,7 +146,9 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Create a new staff account → correct role, can log in, correct restricted access per section 1
 - [ ] Create a new admin account → correct role, full access
 - [ ] Edit an existing user → changes save correctly
-- [ ] Delete a user → removed from list (confirm what happens to their historical activity log entries — should remain, not be deleted with them)
+- [ ] Users table no longer shows an Email column
+- [ ] Clicking a user's order-count badge navigates to Orders pre-filtered to that customer
+- [ ] Users list bulk/row action shows **Activate/Deactivate**, not Delete — confirm historical activity log entries remain intact after deactivating
 - [ ] Walk-in customers created during orders show up here as customer records (no password/login)
 
 ---
@@ -144,6 +160,10 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Low stock count matches actual number of items at or below their threshold
 - [ ] Recent orders list shows correct latest orders with correct status badges (color-coded correctly per status)
 - [ ] Low stock items list shows correct items, "0 left" items visually distinct from low-but-nonzero items
+- [ ] Quick Price Check: scanning a deactivated item shows it with a **"Discontinued"** badge, without blocking or erroring the lookup
+- [ ] Quick Price Check: **"Start walk-in order"** is disabled when every scanned line is discontinued
+- [ ] Quick Price Check: with a mix of active/discontinued lines, "Start walk-in order" shows a toast naming how many were dropped, and only active lines carry over into New Order
+- [ ] Confirming the New Order created from a Price Check handoff succeeds without a late "item unavailable" error at final Confirm
 
 ---
 
@@ -154,6 +174,7 @@ Work through this in order — later sections (Repairs, WhatsApp) depend on data
 - [ ] Gross profit and margin % calculate correctly against known test data
 - [ ] "Items missing cost" note appears only when relevant (old pre-cost-tracking sales), doesn't appear for normal current data
 - [ ] Transaction list searchable by order ID and phone
+- [ ] "Showing X–Y of Z" range on the transaction list matches the currently selected page size
 
 ---
 
@@ -197,3 +218,18 @@ For each, confirm the message actually arrives on a real phone and the wording/v
 - [ ] Slow/unstable network (throttle in devtools) → forms don't silently fail; loading states show correctly
 - [ ] Try submitting a form with required fields empty → clear validation messages, no crash, no silent failure
 - [ ] Stop QZ Tray (or unplug the DP27) mid-session, then try to print → app reports the failure clearly rather than hanging or silently doing nothing
+- [ ] Repairs list bulk/row action shows Activate/Deactivate, not Delete
+
+---
+
+## 16. Pagination (All List Pages)
+
+Applies to every paginated list: Inventory, Purchases, Stock History, Users, Coupons, Orders, Repairs, Audit Log, Error Log, P&L, and the Marketing/customer tabs.
+
+- [ ] The **"Per page"** dropdown is visible on every list above, even when there's only one page of results
+- [ ] The dropdown offers exactly **5 / 10 / 20 / 50 / 100**
+- [ ] The dropdown correctly displays the **configured** page size (e.g. shows "10" even when only 5 records currently exist — expected, not a bug)
+- [ ] Changing the page size **resets to page 1** and re-fetches with the new limit
+- [ ] "Showing X–Y of Z" always reflects the actual returned records, not a stale value from a previous page size
+- [ ] Prev/Next correctly disable at the first/last page and re-enable when navigating away from the boundary
+- [ ] Spot-check at least one list with more than 100 records to confirm multi-page navigation still works with the largest page size selected

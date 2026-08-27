@@ -62,15 +62,21 @@ If another customer walks in while you're partway through an order, it's safe to
 
 Use the **"Repair"** tab within "New walk-in order" to log a new repair ticket, or go to **Repairs** in the sidebar to view and manage all existing repair tickets.
 
-> **Note to whoever finalizes this guide:** the exact fields on the repair creation form (e.g. how the item/frame is identified, whether it's linked to a past order or entered freeform, how the fee is entered) need to be confirmed against the actual `RepairOrderComponent` form before this section is complete. The workflow and fee logic below are based on what the backend already supports — the *exact steps and field names* need a pass once you can walk through the live form.
-
 ### Creating a Repair Ticket
 
-1. From "New walk-in order," click the **"Repair"** tab.
-2. Identify the customer (same lookup/create flow as a New Order).
-3. Enter the item being repaired and a description of the issue.
-4. Enter the **repair fee**, if any — leave at ₹0 (or mark as under warranty) if the repair is free.
-5. Confirm to create the ticket. The customer receives a WhatsApp confirmation with the ticket number, item, and fee (if WhatsApp is configured).
+1. **Customer** — search for or select the customer, or create a new one, just like in a New Order.
+2. **Item** —
+   - **Scan the item's barcode** if the customer still has it, or search for their original invoice. This links the repair to the original purchase (and its warranty, if still valid).
+   - If the item **can't be matched to an invoice** — it wasn't bought here, or the invoice can't be found — use **"Add the item without an invoice"** instead and describe the item manually. Repairs added this way don't have a purchase-linked warranty attached, so let the customer know that up front.
+   - Need to pick a different item after this step? Use **Change item** — it takes you back to item selection without losing your progress on the customer step.
+3. **Issue & fee** — describe the problem and add any notes that'll help whoever does the repair. Enter the **repair fee**, if any — leave at ₹0 (or mark as under warranty) if the repair is free. Use **← Back** if you need to return to the item step.
+4. Click **"Create repair ticket"**. The customer receives a WhatsApp confirmation with the ticket number, item, and fee (if WhatsApp is configured).
+
+Like a New Order, an in-progress repair ticket is saved if you leave the page — you can resume it, or use **Start over** to clear it and begin again.
+
+### Starting a Repair From an Existing Order
+
+If a customer is already looking at (or you're pulling up) one of their past orders, you don't have to start a repair ticket from scratch: open the order and use the **Repair** action on the specific item they want serviced. It jumps straight into the Repair flow with the customer, order, and item already filled in.
 
 ### Repair Status Workflow
 
@@ -121,7 +127,7 @@ If an order gets **cancelled** and money was already collected on it, a **"Refun
 
 ## Checking Inventory
 
-Go to **Inventory** to browse products. You can search by name, brand, SKU, or barcode, and filter by category/gender/frame shape. As staff, you can **view** stock levels and details but can't edit prices or add/remove products — that's admin-only.
+Go to **Inventory** to browse products. You can search by name, brand, SKU, or barcode, and filter by category/gender/frame shape. As staff, you can **view** stock levels and details but can't edit prices or add/remove products — that's admin-only. Each item also shows whether it's **Active** or **Hidden** (discontinued) — this is view-only for staff. A Hidden item can still be looked up (e.g. in Quick Price Check) but cannot be added to a new order.
 
 ---
 
@@ -130,3 +136,4 @@ Go to **Inventory** to browse products. You can search by name, brand, SKU, or b
 - **Prices (MRP) are set automatically** based on cost — you'll never need to calculate this yourself.
 - **Every order automatically updates stock** — no manual stock adjustment needed for normal sales.
 - If something looks wrong (a price, a stock number, an order stuck in the wrong status), flag it to the admin rather than trying to force a workaround — several numbers in the system (revenue, profit reports) depend on things being recorded consistently.
+- Discontinued items are intentionally still visible in lookups like Quick Price Check (so you can still answer a customer's question) but cannot be sold through New Order — if "Start walk-in order" from Price Check seems to skip an item, that's expected: it only carries over items that are still active.
