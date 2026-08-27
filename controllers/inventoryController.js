@@ -240,6 +240,15 @@ async function updateInventory(req, res, next) {
   try {
     const { articles, ...updates } = req.body;
 
+    // Cascade: deactivating (or reactivating) a product must carry every
+    // one of its articles along with it in the same write, so the status
+    // shown on this row is never a lie about what's actually searchable.
+    // One-way only — toggling a single article's own switch (updateArticle,
+    // below) must never climb back up and flip the product's status.
+    if (typeof updates.isActive === "boolean") {
+      updates["articles.$[].isActive"] = updates.isActive;
+    }
+
     const item = await Inventory.findByIdAndUpdate(req.params.id, updates, {
       returnDocument: "after",
       runValidators: true,
@@ -505,7 +514,10 @@ async function bulkUpdateInventoryStatus(req, res, next) {
       return res.status(404).json({ message: "No matching products found" });
     }
 
-    await Inventory.updateMany({ _id: { $in: ids } }, { $set: { isActive } });
+    await Inventory.updateMany(
+      { _id: { $in: ids } },
+      { $set: { isActive, "articles.$[].isActive": isActive } }
+    );
 
     await Promise.all(
       products.map((p) =>

@@ -1,6 +1,7 @@
 const express = require("express");
 const {
   lookupForRepair,
+  lookupOrderForRepair,
   createRepairTicket,
   getAllRepairs,
   getRepairById,
@@ -13,9 +14,10 @@ const { protect, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(protect);
-router.use(authorize("admin", "staff")); // no customer self-service on repairs
+router.use(authorize("admin", "staff"));
 
 router.get("/lookup", lookupForRepair);
+router.get("/lookup-order", lookupOrderForRepair);
 router.post("/", createRepairTicket);
 router.get("/", getAllRepairs);
 router.get("/:id", getRepairById);
