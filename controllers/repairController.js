@@ -20,6 +20,13 @@ const ALL_STATUSES = Object.keys(STATUS_TRANSITIONS);
 // customer's past orders for a matching purchase — so warranty/purchase
 // date can be auto-detected before a ticket is even created.
 // Returns candidate matches; if more than one, frontend lets staff pick.
+//
+// LEGACY — kept for now but no longer used by repair-order.component.ts.
+// This matched against a per-ARTICLE barcode, which made sense back when
+// every item on the printed invoice had its own barcode. The invoice now
+// prints a single ORDER-level barcode instead (see invoiceGenerator.js),
+// so intake uses lookupOrderForRepair below — it resolves straight to the
+// exact order (and every item on it) with no "which purchase?" ambiguity.
 async function lookupForRepair(req, res, next) {
   try {
     const { customerId, barcode } = req.query;
@@ -58,6 +65,35 @@ async function lookupForRepair(req, res, next) {
       itemName: `${product.name} — ${article.color || ""} ${article.lensTint || ""} ${article.size || ""}`.replace(/\s+/g, " ").trim(),
       candidates, // [] if no match found — frontend treats this as "unverified" path
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/repairs/lookup-order?customerId=X&barcode=Y (admin/staff)
+// The customer's printed invoice now carries a single ORDER-level barcode
+// (encoding order.orderId directly — see invoiceGenerator.js) instead of
+// one barcode per item. So repair intake scans that and gets back the
+// whole order — customer, purchase date, and every line item — for staff
+// to pick which specific item needs a ticket. No candidate-disambiguation
+// needed here (unlike the legacy per-item lookupForRepair above): scanning
+// the order's own barcode already tells us exactly which purchase this is.
+async function lookupOrderForRepair(req, res, next) {
+  try {
+    const { customerId, barcode } = req.query;
+    if (!customerId || !barcode) {
+      return res.status(400).json({ message: "customerId and barcode are required" });
+    }
+
+    const order = await Order.findOne({ orderId: String(barcode).trim(), isDeleted: { $ne: true } });
+    if (!order) {
+      return res.status(404).json({ message: "No order found for this barcode" });
+    }
+    if (String(order.customer) !== String(customerId)) {
+      return res.status(400).json({ message: "This invoice belongs to a different customer than the one selected" });
+    }
+
+    res.json({ order });
   } catch (err) {
     next(err);
   }
@@ -285,6 +321,7 @@ async function deleteRepair(req, res, next) {
 
 module.exports = {
   lookupForRepair,
+  lookupOrderForRepair,
   createRepairTicket,
   getAllRepairs,
   getRepairById,
